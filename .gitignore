@@ -1,0 +1,38 @@
+# Node.js
+node_modules/
+dist/
+.env.local
+.env.*.local
+
+# Java/Gradle
+.gradle/
+build/
+.classpath
+.project
+.settings/
+bin/
+*.class
+*.jar
+.idea/
+*.iml
+
+# PHP
+vendor/
+composer.lock
+.env
+
+# IDE
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Database
+.mysql-history
+
+# Docker
+.dockerignore
+
+# Misc
+*.log

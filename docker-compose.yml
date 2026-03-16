@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # フロントエンド (Vue.js + Vite)
+  frontend:
+    container_name: hackz-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_GRAVITY_URL=http://localhost:8080
+      - VITE_API_LOGIC_URL=http://localhost:8000
+    command: npm run dev
+    networks:
+      - hackz-network
+
+  # バックエンド (Java / Spring Boot - 重力計算)
+  gravity-api:
+    container_name: hackz-gravity-api
+    build:
+      context: ./gravity-api
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/hackz_db
+      - SPRING_DATASOURCE_USERNAME=hackz_user
+      - SPRING_DATASOURCE_PASSWORD=hackz_password
+    depends_on:
+      - db
+    networks:
+      - hackz-network
+
+  # バックエンド (PHP - 風化・熱量・DB)
+  logic-api:
+    container_name: hackz-logic-api
+    build:
+      context: ./logic-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logic-api:/app
+    environment:
+      - DB_HOST=db
+      - DB_USER=hackz_user
+      - DB_PASSWORD=hackz_password
+      - DB_NAME=hackz_db
+      - GRAVITY_API_URL=http://gravity-api:8080
+    depends_on:
+      - db
+    networks:
+      - hackz-network
+
+  # データベース (MySQL)
+  db:
+    container_name: hackz-db
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: hackz_db
+      MYSQL_USER: hackz_user
+      MYSQL_PASSWORD: hackz_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - db-volume:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - hackz-network
+
+networks:
+  hackz-network:
+    driver: bridge
+
+volumes:
+  db-volume:
