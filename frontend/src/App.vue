@@ -8,6 +8,53 @@
     <div class="main-content">
       <div ref="threeContainer" class="three-canvas" @click="handleClick"></div>
 
+      <!-- 石詳細ポップアップ -->
+      <Transition name="popup">
+        <div v-if="selectedPost" class="stone-popup" :style="popupStyle">
+          <button class="popup-close" @click="selectedPost = null">x</button>
+          <p class="popup-text">{{ selectedPost.text }}</p>
+          <div class="popup-stats">
+            <span>質量 {{ selectedPost.mass }}</span>
+            <span>熱量 {{ selectedPost.heat }}</span>
+            <span>いいね {{ selectedPost.likes || 0 }}</span>
+          </div>
+          <button class="like-btn" @click="likePost(selectedPost)">
+            いいね +1
+          </button>
+        </div>
+      </Transition>
+
+      <!-- 石一覧トグルボタン -->
+      <button class="list-toggle" @click="showList = !showList">
+        {{ showList ? '閉じる' : '一覧' }}
+      </button>
+
+      <!-- 石一覧パネル -->
+      <Transition name="slide">
+        <div v-if="showList" class="stone-list">
+          <h3>投じられた石</h3>
+          <div v-if="posts.length === 0" class="list-empty">まだ石がありません</div>
+          <div
+            v-for="p in sortedPosts"
+            :key="p.id"
+            class="list-item"
+            @click="focusStone(p)"
+          >
+            <div class="list-item-header">
+              <span class="list-heat-bar">
+                <span class="list-heat-fill" :style="{ width: Math.min(p.heat, 100) + '%' }"></span>
+              </span>
+              <span class="list-likes">{{ p.likes || 0 }}</span>
+            </div>
+            <p class="list-item-text">{{ p.text }}</p>
+            <div class="list-item-meta">
+              <span>質量 {{ p.mass }}</span>
+              <span>熱量 {{ p.heat }}</span>
+            </div>
+          </div>
+        </div>
+      </Transition>
+
       <div class="sidebar">
         <div class="input-section">
           <textarea
@@ -37,7 +84,7 @@
 
         <div class="info-section">
           <h3>ステータス</h3>
-          <p>投稿数: {{ postCount }}</p>
+          <p>投稿数: {{ posts.length }}</p>
           <p>API接続: {{ apiStatus }}</p>
         </div>
       </div>
@@ -46,16 +93,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import * as THREE from 'three'
 
 const threeContainer = ref(null)
 const postText = ref('')
-const postCount = ref(0)
 const apiStatus = ref('確認中...')
 const isSubmitting = ref(false)
 const lastMass = ref(null)
 const lastGravity = ref(null)
+
+// --- UI状態 ---
+const selectedPost = ref(null)
+const popupStyle = ref({})
+const showList = ref(false)
 
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock
@@ -79,11 +130,78 @@ const posts = ref([])
 
 function loadMockPosts() {
   posts.value = [
-    { id: 1, text: 'SNSの即時性は本当に必要なのか？', x: -0.4, z: -0.3, mass: 65, heat: 40, weathered: 0.0 },
-    { id: 2, text: 'もっとゆっくり議論したい', x: 0.2, z: 0.2, mass: 30, heat: 10, weathered: 0.2 },
-    { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, weathered: 0.0 },
-    { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, weathered: 0.4 },
+    { id: 1, text: 'SNSの即時性は本当に必要なのか？', x: -0.4, z: -0.3, mass: 65, heat: 40, likes: 12, weathered: 0.0 },
+    { id: 2, text: 'もっとゆっくり議論したい', x: 0.2, z: 0.2, mass: 30, heat: 10, likes: 3, weathered: 0.2 },
+    { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0 },
+    { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4 },
   ]
+}
+
+// 一覧のソート（熱量順）
+const sortedPosts = computed(() => {
+  return [...posts.value].sort((a, b) => b.heat - a.heat)
+})
+
+// いいね
+function likePost(post) {
+  post.likes = (post.likes || 0) + 1
+  post.heat = Math.min(100, post.heat + 10)
+  // 3Dメッシュの見た目を更新
+  const entry = stoneMeshes.find(s => s.post.id === post.id)
+  if (entry) {
+    updateStoneMeshAppearance(entry)
+    // いいね波紋
+    addRipple3D(entry.group.position.x, entry.group.position.z, 20)
+  }
+}
+
+// 石メッシュの見た目を熱量に応じて更新
+function updateStoneMeshAppearance(entry) {
+  const p = entry.post
+  const color = massColor(p.mass)
+  const stoneChild = entry.group.children[0]
+  if (stoneChild && stoneChild.material) {
+    stoneChild.material.emissive = color.clone().multiplyScalar(p.heat > 30 ? 0.3 : 0.05)
+    stoneChild.material.opacity = Math.max(0.4, 1 - p.weathered)
+  }
+}
+
+// 熱量の自然減衰 + 石の消滅
+function decayHeat() {
+  for (let i = posts.value.length - 1; i >= 0; i--) {
+    const p = posts.value[i]
+    p.heat = Math.max(0, p.heat - 0.5)
+    p.weathered = Math.min(1, p.weathered + 0.002)
+
+    // 熱量ゼロ → 沈没・消滅
+    if (p.heat <= 0 && p.weathered >= 0.8) {
+      removeStoneMesh(p.id)
+      posts.value.splice(i, 1)
+      if (selectedPost.value && selectedPost.value.id === p.id) {
+        selectedPost.value = null
+      }
+    } else {
+      const entry = stoneMeshes.find(s => s.post.id === p.id)
+      if (entry) updateStoneMeshAppearance(entry)
+    }
+  }
+}
+
+// 石メッシュを削除
+function removeStoneMesh(postId) {
+  const idx = stoneMeshes.findIndex(s => s.post.id === postId)
+  if (idx !== -1) {
+    // 沈没アニメーション用にマーク
+    stoneMeshes[idx].sinking = true
+  }
+}
+
+// 一覧から石にフォーカス
+function focusStone(post) {
+  selectedPost.value = post
+  showList.value = false
+  // ポップアップを画面中央に
+  popupStyle.value = { left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }
 }
 
 // --- 質量→色 ---
@@ -147,15 +265,20 @@ function initThree() {
   waterMesh.rotation.x = -Math.PI / 2
   scene.add(waterMesh)
 
-  // 水底のグリッド
-  const gridHelper = new THREE.GridHelper(WATER_SIZE, 30, 0x112244, 0x112244)
-  gridHelper.position.y = -2
-  gridHelper.material.opacity = 0.15
-  gridHelper.material.transparent = true
-  scene.add(gridHelper)
+  // 水底
+  const bottomGeo = new THREE.PlaneGeometry(WATER_SIZE * 1.2, WATER_SIZE * 1.2)
+  const bottomMat = new THREE.MeshPhongMaterial({ color: 0x0a1a3a, emissive: 0x050d1a })
+  const bottomMesh = new THREE.Mesh(bottomGeo, bottomMat)
+  bottomMesh.rotation.x = -Math.PI / 2
+  bottomMesh.position.y = -2
+  scene.add(bottomMesh)
 
   // 背景の空（暗い夜空）
   scene.background = new THREE.Color(0x0a1628)
+
+  // --- 周囲の地形 ---
+  createTerrain()
+  createRocks()
 
   // スプラッシュ用パーティクルシステム
   const splashGeo = new THREE.BufferGeometry()
@@ -176,6 +299,137 @@ function initThree() {
 
   // 初期の石を配置
   createStoneMeshes()
+}
+
+// --- 地形生成 ---
+function createTerrain() {
+  const half = WATER_SIZE / 2
+  const terrainMat = new THREE.MeshPhongMaterial({
+    color: 0x2a3a2a,
+    emissive: 0x0a0f0a,
+    specular: 0x111111,
+    shininess: 10,
+    flatShading: true,
+  })
+
+  // 4辺に崖地形を配置
+  const sides = [
+    { px: 0, pz: -half - 4, rx: 0, ry: 0 },         // 奥
+    { px: 0, pz: half + 4, rx: 0, ry: Math.PI },     // 手前
+    { px: -half - 4, pz: 0, rx: 0, ry: Math.PI / 2 },  // 左
+    { px: half + 4, pz: 0, rx: 0, ry: -Math.PI / 2 },  // 右
+  ]
+
+  for (const side of sides) {
+    const geo = new THREE.PlaneGeometry(WATER_SIZE + 10, 8, 40, 8)
+    const positions = geo.attributes.position
+
+    // 頂点をランダムに変位させて自然な崖を作る
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i)
+      const y = positions.getY(i)
+      // 上部ほど凹凸を大きく
+      const noise = (Math.sin(x * 1.3) * 0.5 + Math.sin(x * 3.7) * 0.3 + Math.random() * 0.4) * (y + 4) * 0.15
+      positions.setZ(i, noise)
+    }
+    geo.computeVertexNormals()
+
+    const mesh = new THREE.Mesh(geo, terrainMat)
+    mesh.position.set(side.px, 1, side.pz)
+    mesh.rotation.y = side.ry
+    scene.add(mesh)
+  }
+
+  // 四隅に大きめの岩山
+  const corners = [
+    { x: -half - 2, z: -half - 2 },
+    { x: half + 2, z: -half - 2 },
+    { x: -half - 2, z: half + 2 },
+    { x: half + 2, z: half + 2 },
+  ]
+  const rockMat = new THREE.MeshPhongMaterial({
+    color: 0x3a3a3a,
+    emissive: 0x0a0a0a,
+    flatShading: true,
+  })
+
+  for (const c of corners) {
+    const geo = new THREE.DodecahedronGeometry(3 + Math.random() * 2, 1)
+    // 頂点を歪ませて自然に
+    const positions = geo.attributes.position
+    for (let i = 0; i < positions.count; i++) {
+      positions.setX(i, positions.getX(i) * (0.8 + Math.random() * 0.4))
+      positions.setY(i, positions.getY(i) * (0.6 + Math.random() * 0.5))
+      positions.setZ(i, positions.getZ(i) * (0.8 + Math.random() * 0.4))
+    }
+    geo.computeVertexNormals()
+    const mesh = new THREE.Mesh(geo, rockMat)
+    mesh.position.set(c.x, 0.5, c.z)
+    scene.add(mesh)
+  }
+}
+
+// --- 散在する岩 ---
+function createRocks() {
+  const half = WATER_SIZE / 2
+  const rockMat = new THREE.MeshPhongMaterial({
+    color: 0x4a4a4a,
+    emissive: 0x0a0a0a,
+    specular: 0x222222,
+    shininess: 15,
+    flatShading: true,
+  })
+  const mossMat = new THREE.MeshPhongMaterial({
+    color: 0x2a4a2a,
+    emissive: 0x0a1a0a,
+    flatShading: true,
+  })
+
+  // 水面の縁に沿って岩を散在
+  const rockConfigs = []
+  for (let i = 0; i < 35; i++) {
+    const side = Math.floor(Math.random() * 4)
+    let x, z
+    const offset = (Math.random() - 0.5) * WATER_SIZE * 0.9
+    const edgeDist = half + 0.5 + Math.random() * 3
+    if (side === 0) { x = offset; z = -edgeDist }
+    else if (side === 1) { x = offset; z = edgeDist }
+    else if (side === 2) { x = -edgeDist; z = offset }
+    else { x = edgeDist; z = offset }
+    rockConfigs.push({
+      x, z,
+      size: 0.4 + Math.random() * 1.5,
+      moss: Math.random() > 0.6,
+    })
+  }
+
+  for (const rc of rockConfigs) {
+    const detail = rc.size > 1 ? 1 : 0
+    const geo = new THREE.DodecahedronGeometry(rc.size, detail)
+    const positions = geo.attributes.position
+    for (let i = 0; i < positions.count; i++) {
+      positions.setX(i, positions.getX(i) * (0.7 + Math.random() * 0.6))
+      positions.setY(i, positions.getY(i) * (0.5 + Math.random() * 0.6))
+      positions.setZ(i, positions.getZ(i) * (0.7 + Math.random() * 0.6))
+    }
+    geo.computeVertexNormals()
+
+    const mesh = new THREE.Mesh(geo, rc.moss ? mossMat : rockMat)
+    mesh.position.set(rc.x, -0.3 + rc.size * 0.3, rc.z)
+    mesh.rotation.set(Math.random() * 0.5, Math.random() * Math.PI, Math.random() * 0.3)
+    scene.add(mesh)
+  }
+
+  // 地面（遠方まで広がる地形）
+  const groundGeo = new THREE.PlaneGeometry(120, 120)
+  const groundMat = new THREE.MeshPhongMaterial({
+    color: 0x1a2a1a,
+    emissive: 0x050a05,
+  })
+  const ground = new THREE.Mesh(groundGeo, groundMat)
+  ground.rotation.x = -Math.PI / 2
+  ground.position.y = -1.5
+  scene.add(ground)
 }
 
 // --- 石の3Dメッシュ生成 ---
@@ -209,22 +463,6 @@ function addStoneMesh(p) {
   })
   const stoneMesh = new THREE.Mesh(stoneGeo, stoneMat)
   group.add(stoneMesh)
-
-  // 熱量が高い石にはグローリング
-  if (p.heat > 20) {
-    const glowGeo = new THREE.RingGeometry(size + 0.2, size + 0.5, 32)
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: color,
-      transparent: true,
-      opacity: 0.3,
-      side: THREE.DoubleSide,
-    })
-    const glowMesh = new THREE.Mesh(glowGeo, glowMat)
-    glowMesh.rotation.x = -Math.PI / 2
-    glowMesh.position.y = 0.05
-    glowMesh.userData.isGlow = true
-    group.add(glowMesh)
-  }
 
   // テキストラベル（Sprite）
   const label = p.text.length > 16 ? p.text.slice(0, 16) + '…' : p.text
@@ -436,7 +674,8 @@ function updateFlyingStone(dt) {
       x: f.targetX / (WATER_SIZE / 2) / 0.8,
       z: f.targetZ / (WATER_SIZE / 2) / 0.8,
       mass: f.mass,
-      heat: 0,
+      heat: 50,
+      likes: 0,
       weathered: 0,
     }
     posts.value.push(newPost)
@@ -474,25 +713,32 @@ function updateFlyingStone(dt) {
   f.trailLine.geometry.setDrawRange(0, Math.floor(f.trailPositions.length / 3))
 }
 
-// --- 石のボブ（浮遊）アニメーション ---
+// --- 石のボブ（浮遊）+ 沈没アニメーション ---
 function updateStones(elapsed) {
-  for (const s of stoneMeshes) {
+  for (let i = stoneMeshes.length - 1; i >= 0; i--) {
+    const s = stoneMeshes[i]
+
+    if (s.sinking) {
+      // 沈没アニメーション
+      s.group.position.y -= 0.02
+      s.group.children.forEach(child => {
+        if (child.material) {
+          child.material.opacity = Math.max(0, (child.material.opacity || 1) - 0.005)
+        }
+      })
+      if (s.group.position.y < -3) {
+        scene.remove(s.group)
+        stoneMeshes.splice(i, 1)
+      }
+      continue
+    }
+
     // 水面に浮くようにゆっくり上下
     s.group.position.y = s.baseY + Math.sin(elapsed * 1.5 + s.post.id * 0.7) * 0.1
-
-    // 熱量が高い石のグロー脈動
-    if (s.post.heat > 20) {
-      for (const child of s.group.children) {
-        if (child.userData.isGlow) {
-          child.material.opacity = 0.15 + Math.sin(elapsed * 3 + s.post.id) * 0.15
-          child.scale.setScalar(1 + Math.sin(elapsed * 2 + s.post.id) * 0.1)
-        }
-      }
-    }
   }
 }
 
-// --- クリック → 波紋 ---
+// --- クリック → 石選択 or 波紋 ---
 function handleClick(event) {
   const container = threeContainer.value
   const rect = container.getBoundingClientRect()
@@ -503,15 +749,36 @@ function handleClick(event) {
 
   const raycaster = new THREE.Raycaster()
   raycaster.setFromCamera(mouse, camera)
-  const intersects = raycaster.intersectObject(waterMesh)
-  if (intersects.length > 0) {
-    const point = intersects[0].point
+
+  // まず石との交差判定
+  const stoneMeshList = stoneMeshes.map(s => s.group.children[0]).filter(Boolean)
+  const stoneHits = raycaster.intersectObjects(stoneMeshList)
+  if (stoneHits.length > 0) {
+    const hitMesh = stoneHits[0].object
+    const entry = stoneMeshes.find(s => s.group.children[0] === hitMesh)
+    if (entry) {
+      selectedPost.value = entry.post
+      // ポップアップ位置をクリック位置に
+      popupStyle.value = {
+        left: event.clientX + 'px',
+        top: Math.max(10, event.clientY - 120) + 'px',
+      }
+      return
+    }
+  }
+
+  // 石に当たらなかった → 水面に波紋
+  selectedPost.value = null
+  const waterHits = raycaster.intersectObject(waterMesh)
+  if (waterHits.length > 0) {
+    const point = waterHits[0].point
     addRipple3D(point.x, point.z, 15)
     addSplash3D(point.x, point.z, 10)
   }
 }
 
 // --- メインループ ---
+let decayTimer = 0
 function animate() {
   animationId = requestAnimationFrame(animate)
   const dt = Math.min(clock.getDelta(), 0.05)
@@ -522,6 +789,13 @@ function animate() {
   updateSplashes(dt)
   updateStones(elapsed)
   updateFlyingStone(dt)
+
+  // 熱量の自然減衰（2秒ごと）
+  decayTimer += dt
+  if (decayTimer > 2) {
+    decayTimer = 0
+    decayHeat()
+  }
 
   renderer.render(scene, camera)
 }
@@ -583,7 +857,6 @@ const submitPost = async () => {
     const targetZ = (Math.random() - 0.5) * WATER_SIZE * 0.6
     throwStone(targetX, targetZ, mass, postText.value)
 
-    postCount.value++
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
@@ -781,5 +1054,209 @@ textarea::placeholder {
   margin: 4px 0;
   font-size: 0.9em;
   opacity: 0.6;
+}
+
+/* --- 石詳細ポップアップ --- */
+.stone-popup {
+  position: fixed;
+  z-index: 100;
+  background: rgba(10, 22, 50, 0.95);
+  border: 1px solid rgba(100, 180, 255, 0.3);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 220px;
+  max-width: 320px;
+  color: white;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.popup-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.popup-close:hover {
+  color: white;
+}
+
+.popup-text {
+  font-size: 1em;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  word-break: break-word;
+}
+
+.popup-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 0.8em;
+  opacity: 0.6;
+  margin-bottom: 12px;
+}
+
+.like-btn {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid rgba(255, 120, 120, 0.4);
+  background: rgba(255, 120, 120, 0.1);
+  color: #ffaaaa;
+  font-weight: bold;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.95em;
+}
+
+.like-btn:hover {
+  background: rgba(255, 120, 120, 0.25);
+  border-color: rgba(255, 120, 120, 0.7);
+  transform: scale(1.03);
+}
+
+.popup-enter-active, .popup-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+.popup-enter-from, .popup-leave-to {
+  opacity: 0;
+  transform: scale(0.9) translateY(10px);
+}
+
+/* --- 石一覧トグル --- */
+.list-toggle {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 50;
+  padding: 8px 16px;
+  border: 1px solid rgba(100, 180, 255, 0.3);
+  background: rgba(10, 22, 50, 0.85);
+  color: #aaddff;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9em;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s;
+}
+
+.list-toggle:hover {
+  background: rgba(100, 180, 255, 0.2);
+}
+
+/* --- 石一覧パネル --- */
+.stone-list {
+  position: absolute;
+  top: 50px;
+  left: 10px;
+  z-index: 50;
+  width: 320px;
+  max-height: calc(100% - 70px);
+  overflow-y: auto;
+  background: rgba(10, 22, 50, 0.92);
+  border: 1px solid rgba(100, 180, 255, 0.15);
+  border-radius: 12px;
+  padding: 16px;
+  color: white;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.stone-list h3 {
+  font-size: 1em;
+  margin-bottom: 12px;
+  opacity: 0.8;
+}
+
+.list-empty {
+  opacity: 0.4;
+  font-size: 0.9em;
+  text-align: center;
+  padding: 20px 0;
+}
+
+.list-item {
+  padding: 10px;
+  border: 1px solid rgba(100, 180, 255, 0.08);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.list-item:hover {
+  background: rgba(100, 180, 255, 0.08);
+  border-color: rgba(100, 180, 255, 0.2);
+}
+
+.list-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.list-heat-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.list-heat-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4af, #f64);
+  border-radius: 2px;
+  transition: width 0.5s;
+}
+
+.list-likes {
+  font-size: 0.75em;
+  opacity: 0.5;
+  white-space: nowrap;
+}
+
+.list-likes::before {
+  content: '\2764\FE0F ';
+}
+
+.list-item-text {
+  font-size: 0.9em;
+  line-height: 1.4;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.list-item-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.75em;
+  opacity: 0.4;
+}
+
+.slide-enter-active, .slide-leave-active {
+  transition: opacity 0.25s, transform 0.25s;
+}
+.slide-enter-from, .slide-leave-to {
+  opacity: 0;
+  transform: translateX(-20px);
+}
+
+.stone-list::-webkit-scrollbar {
+  width: 4px;
+}
+.stone-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.stone-list::-webkit-scrollbar-thumb {
+  background: rgba(100, 180, 255, 0.2);
+  border-radius: 2px;
 }
 </style>
