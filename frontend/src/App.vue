@@ -336,12 +336,14 @@ function initThree() {
     specular: 0x88bbff,
     shininess: 80,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.55,
     side: THREE.DoubleSide,
     flatShading: false,
+    depthWrite: false,
   })
   waterMesh = new THREE.Mesh(waterGeo, waterMat)
   waterMesh.rotation.x = -Math.PI / 2
+  waterMesh.renderOrder = 1
   scene.add(waterMesh)
 
   // 水底
@@ -530,32 +532,50 @@ function addStoneMesh(p) {
   const size = 0.3 + p.mass * 0.005
   const color = massColor(p.mass)
 
-  // 石本体（変形した球体 → 石っぽく）
-  const stoneGeo = new THREE.DodecahedronGeometry(size, 1)
+  // 石本体（SphereGeometryを歪ませて自然な石に）
+  const stoneGeo = new THREE.SphereGeometry(size, 8, 6)
+  const positions = stoneGeo.attributes.position
+  // シードっぽく使うためにidベースで歪みを安定させる
+  const seed = p.id * 137.5
+  for (let i = 0; i < positions.count; i++) {
+    let x = positions.getX(i)
+    let y = positions.getY(i)
+    let z = positions.getZ(i)
+    // 上下を潰して扁平に（川石っぽく）
+    y *= 0.45
+    // 頂点ごとにランダムに凹凸
+    const noise = 0.7 + 0.6 * Math.abs(Math.sin(seed + i * 3.7) * Math.cos(i * 2.3 + seed * 0.5))
+    x *= noise
+    z *= noise
+    positions.setXYZ(i, x, y, z)
+  }
+  stoneGeo.computeVertexNormals()
+
   const stoneMat = new THREE.MeshPhongMaterial({
-    color: color,
-    emissive: color.clone().multiplyScalar(p.heat > 30 ? 0.3 : 0.05),
-    specular: 0x666666,
-    shininess: 40,
+    color: 0x888888,
+    emissive: color.clone().multiplyScalar(p.heat > 30 ? 0.25 : 0.03),
+    specular: 0x333333,
+    shininess: 15,
     transparent: true,
     opacity: Math.max(0.4, 1 - p.weathered),
+    flatShading: true,
   })
   const stoneMesh = new THREE.Mesh(stoneGeo, stoneMat)
   group.add(stoneMesh)
 
-  // テキストラベル（Sprite）
+  // テキストラベル（Sprite）水面上に浮かせて表示
   const label = p.text.length > 16 ? p.text.slice(0, 16) + '…' : p.text
   const sprite = createTextSprite(label, color)
-  sprite.position.y = size + 0.6
+  sprite.position.y = 2.0
   group.add(sprite)
 
-  // 配置
+  // 配置（水底に沈める）
   const wx = p.x * (WATER_SIZE / 2) * 0.8
   const wz = p.z * (WATER_SIZE / 2) * 0.8
-  group.position.set(wx, 0.2, wz)
+  group.position.set(wx, -1.5, wz)
 
   scene.add(group)
-  stoneMeshes.push({ group, post: p, baseY: 0.2 })
+  stoneMeshes.push({ group, post: p, baseY: -1.5 })
 }
 
 function createTextSprite(text, color) {
@@ -581,9 +601,11 @@ function createTextSprite(text, color) {
     map: texture,
     transparent: true,
     depthWrite: false,
+    depthTest: false,
   })
   const sprite = new THREE.Sprite(mat)
   sprite.scale.set(4, 0.5, 1)
+  sprite.renderOrder = 2
   return sprite
 }
 
@@ -705,12 +727,21 @@ function throwStone(targetX, targetZ, mass, text) {
 
   const size = 0.3 + mass * 0.005
   const color = massColor(mass)
-  const geo = new THREE.DodecahedronGeometry(size, 1)
+  const geo = new THREE.SphereGeometry(size, 8, 6)
+  const pos = geo.attributes.position
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, pos.getY(i) * 0.45)
+    const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
+    pos.setX(i, pos.getX(i) * n)
+    pos.setZ(i, pos.getZ(i) * n)
+  }
+  geo.computeVertexNormals()
   const mat = new THREE.MeshPhongMaterial({
-    color: color,
-    emissive: color.clone().multiplyScalar(0.2),
-    specular: 0x666666,
-    shininess: 40,
+    color: 0x888888,
+    emissive: color.clone().multiplyScalar(0.15),
+    specular: 0x333333,
+    shininess: 15,
+    flatShading: true,
   })
   const mesh = new THREE.Mesh(geo, mat)
   mesh.position.set(startX, startY, startZ)
@@ -780,7 +811,7 @@ function updateFlyingStone(dt) {
 
   f.mesh.position.x = u * u * f.startX + 2 * u * t * midX + t * t * f.targetX
   f.mesh.position.z = u * u * f.startZ + 2 * u * t * midZ + t * t * f.targetZ
-  f.mesh.position.y = u * u * f.startY + 2 * u * t * f.peakY + t * t * 0.3
+  f.mesh.position.y = u * u * f.startY + 2 * u * t * f.peakY + t * t * (-1.5)
   f.mesh.rotation.x += dt * 5
   f.mesh.rotation.z += dt * 3
 
@@ -820,8 +851,8 @@ function updateStones(elapsed) {
       continue
     }
 
-    // 水面に浮くようにゆっくり上下
-    s.group.position.y = s.baseY + Math.sin(elapsed * 1.5 + s.post.id * 0.7) * 0.1
+    // 水底でわずかに揺れる
+    s.group.position.y = s.baseY + Math.sin(elapsed * 0.8 + s.post.id * 0.7) * 0.02
   }
 }
 
