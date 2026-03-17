@@ -14,6 +14,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'Gravity API is running!' });
 });
 
+// 最小文字数の定義
+const MIN_TEXT_LENGTH = 3;
+
 // 質量計算エンドポイント
 app.post('/api/calculate-mass', (req, res) => {
   try {
@@ -21,6 +24,12 @@ app.post('/api/calculate-mass', (req, res) => {
 
     if (!text || text.trim().length === 0) {
       return res.status(400).json({ error: 'Text is required' });
+    }
+
+    if (text.trim().length < MIN_TEXT_LENGTH) {
+      return res.status(400).json({ 
+        error: `Text must be at least ${MIN_TEXT_LENGTH} characters long` 
+      });
     }
 
     const mass = calculateMass(text);
