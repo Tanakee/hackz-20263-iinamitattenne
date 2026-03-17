@@ -76,26 +76,89 @@ switch ($request_uri) {
         break;
 }
 
-// ハンドラー関数群
-function handleCreatePost() {
-    $input = json_decode(file_get_contents('php://input'), true);
+// Gravity APIとの連携関数
+function calculateMass($text) {
+    $gravityApiUrl = getenv('GRAVITY_API_URL') ?: 'http://gravity-api:8080';
 
-    if (!isset($input['text']) || empty($input['text'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Text is required']);
-        return;
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $gravityApiUrl . '/api/calculate-mass');
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['text' => $text]));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200) {
+        throw new Exception('Failed to calculate mass from Gravity API');
     }
 
-    $response = [
-        'id' => uniqid(),
-        'text' => $input['text'],
-        'created_at' => date('Y-m-d H:i:s'),
-        'heat' => 0,
-        'weathered' => false
-    ];
+    $data = json_decode($response, true);
+    if (!isset($data['mass'])) {
+        throw new Exception('Invalid response from Gravity API');
+    }
 
-    http_response_code(201);
-    echo json_encode($response);
+    return $data['mass'];
+}
+
+// ハンドラー関数群
+
+// 投稿作成ハンドラー
+function handleCreatePost() {
+    try {
+        $input = json_decode(file_get_contents('php://input'), true);
+
+        // バリデーション
+        if (!isset($input['text']) || empty(trim($input['text']))) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Text is required and cannot be empty']);
+            return;
+        }
+
+        if (!isset($input['x']) || !is_numeric($input['x'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Valid x coordinate is required']);
+            return;
+        }
+
+        if (!isset($input['y']) || !is_numeric($input['y'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Valid y coordinate is required']);
+            return;
+        }
+
+        $text = trim($input['text']);
+        $x = (float)$input['x'];
+        $y = (float)$input['y'];
+
+        // Gravity APIで質量計算
+        $mass = calculateMass($text);
+
+        // DBに保存
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("INSERT INTO posts (text, x, y, mass, created_at) VALUES (?, ?, ?, ?, NOW())");
+        $stmt->execute([$text, $x, $y, $mass]);
+
+        $postId = $pdo->lastInsertId();
+
+        // 保存したデータを取得してレスポンス
+        $stmt = $pdo->prepare("SELECT id, text, x, y, mass, heat, weathered, created_at FROM posts WHERE id = ?");
+        $stmt->execute([$postId]);
+        $post = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        http_response_code(201);
+        echo json_encode([
+            'success' => true,
+            'post' => $post,
+            'message' => 'Post created successfully'
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to create post: ' . $e->getMessage()]);
+    }
 }
 
 function handleGetPosts() {
