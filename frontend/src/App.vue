@@ -1,16 +1,17 @@
 <template>
   <div class="container">
-    <div class="header">
-      <h1>いい波立ってんね～</h1>
-      <p>議論が波紋となり、風となって拡散される</p>
-    </div>
-
     <div class="main-content">
       <div ref="threeContainer" class="three-canvas" @click="handleClick"></div>
 
+      <!-- ヘッダー（Canvas上にオーバーレイ） -->
+      <div class="header-overlay">
+        <h1>いい波立ってんね～</h1>
+        <p>議論が波紋となり、風となって拡散される</p>
+      </div>
+
       <!-- 石詳細ポップアップ -->
       <Transition name="popup">
-        <div v-if="selectedPost" class="stone-popup" :style="popupStyle">
+        <div v-if="selectedPost" class="stone-popup" :style="popupStyle" @click.stop>
           <button class="popup-close" @click="selectedPost = null">x</button>
           <p class="popup-text">{{ selectedPost.text }}</p>
           <div class="popup-stats">
@@ -95,6 +96,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import * as THREE from 'three'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
 const threeContainer = ref(null)
 const postText = ref('')
@@ -109,9 +111,78 @@ const popupStyle = ref({})
 const showList = ref(false)
 
 // --- Three.js 変数 ---
-let scene, camera, renderer, clock
+let scene, camera, renderer, clock, controls
 let waterMesh, waterGeo
 let animationId = null
+
+// --- 効果音 (Web Audio API) ---
+let audioCtx = null
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+}
+
+function playSplashSound(mass) {
+  if (!audioCtx) return
+  const now = audioCtx.currentTime
+
+  // ノイズバースト（水しぶき）
+  const bufferSize = audioCtx.sampleRate * 0.15
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.15))
+  }
+  const noise = audioCtx.createBufferSource()
+  noise.buffer = buffer
+
+  // 低音（ドボン）
+  const osc = audioCtx.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.setValueAtTime(80 + mass * 0.5, now)
+  osc.frequency.exponentialRampToValueAtTime(30, now + 0.3)
+
+  // ゲイン
+  const noiseGain = audioCtx.createGain()
+  noiseGain.gain.setValueAtTime(0.15, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2)
+
+  const oscGain = audioCtx.createGain()
+  oscGain.gain.setValueAtTime(0.1 + mass * 0.002, now)
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4)
+
+  // フィルタ（水っぽさ）
+  const filter = audioCtx.createBiquadFilter()
+  filter.type = 'lowpass'
+  filter.frequency.setValueAtTime(2000, now)
+  filter.frequency.exponentialRampToValueAtTime(400, now + 0.2)
+
+  noise.connect(filter)
+  filter.connect(noiseGain)
+  noiseGain.connect(audioCtx.destination)
+  osc.connect(oscGain)
+  oscGain.connect(audioCtx.destination)
+
+  noise.start(now)
+  noise.stop(now + 0.2)
+  osc.start(now)
+  osc.stop(now + 0.4)
+}
+
+function playLikeSound() {
+  if (!audioCtx) return
+  const now = audioCtx.currentTime
+  const osc = audioCtx.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.setValueAtTime(600, now)
+  osc.frequency.exponentialRampToValueAtTime(900, now + 0.1)
+  const gain = audioCtx.createGain()
+  gain.gain.setValueAtTime(0.08, now)
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15)
+  osc.connect(gain)
+  gain.connect(audioCtx.destination)
+  osc.start(now)
+  osc.stop(now + 0.15)
+}
 const WATER_SEG = 128
 const WATER_SIZE = 40
 
@@ -146,12 +217,11 @@ const sortedPosts = computed(() => {
 function likePost(post) {
   post.likes = (post.likes || 0) + 1
   post.heat = Math.min(100, post.heat + 10)
+  playLikeSound()
   // 3Dメッシュの見た目を更新
   const entry = stoneMeshes.find(s => s.post.id === post.id)
   if (entry) {
     updateStoneMeshAppearance(entry)
-    // いいね波紋
-    addRipple3D(entry.group.position.x, entry.group.position.z, 20)
   }
 }
 
@@ -236,6 +306,15 @@ function initThree() {
   container.appendChild(renderer.domElement)
 
   clock = new THREE.Clock()
+
+  // OrbitControls（カメラ操作）
+  controls = new OrbitControls(camera, renderer.domElement)
+  controls.enableDamping = true
+  controls.dampingFactor = 0.05
+  controls.maxPolarAngle = Math.PI / 2.2  // 水面より下に潜らない
+  controls.minDistance = 10
+  controls.maxDistance = 50
+  controls.target.set(0, 0, 0)
 
   // ライティング
   const ambientLight = new THREE.AmbientLight(0x334466, 0.8)
@@ -561,8 +640,15 @@ function updateRipples(dt) {
   for (let i = ripples.length - 1; i >= 0; i--) {
     const r = ripples[i]
     r.radius += r.speed * dt
-    r.amplitude *= 0.995
-    if (r.radius > r.maxRadius || r.amplitude < 0.001) {
+    // 最大半径の70%を超えたら徐々にフェードアウト
+    const fadeStart = r.maxRadius * 0.7
+    if (r.radius > fadeStart) {
+      const fadeRatio = (r.radius - fadeStart) / (r.maxRadius - fadeStart)
+      r.amplitude *= (1 - fadeRatio * 0.05)
+    } else {
+      r.amplitude *= 0.998
+    }
+    if (r.amplitude < 0.001) {
       ripples.splice(i, 1)
     }
   }
@@ -666,6 +752,7 @@ function updateFlyingStone(dt) {
 
     addSplash3D(f.targetX, f.targetZ, f.mass)
     addRipple3D(f.targetX, f.targetZ, f.mass)
+    playSplashSound(f.mass)
 
     // 石を配置
     const newPost = {
@@ -740,6 +827,7 @@ function updateStones(elapsed) {
 
 // --- クリック → 石選択 or 波紋 ---
 function handleClick(event) {
+  initAudio()
   const container = threeContainer.value
   const rect = container.getBoundingClientRect()
   const mouse = new THREE.Vector2(
@@ -758,10 +846,12 @@ function handleClick(event) {
     const entry = stoneMeshes.find(s => s.group.children[0] === hitMesh)
     if (entry) {
       selectedPost.value = entry.post
-      // ポップアップ位置をクリック位置に
+      // ポップアップ位置をクリック位置に（見切れ防止）
+      const px = Math.min(event.clientX, window.innerWidth - 340)
+      const py = Math.max(10, Math.min(event.clientY - 80, window.innerHeight - 250))
       popupStyle.value = {
-        left: event.clientX + 'px',
-        top: Math.max(10, event.clientY - 120) + 'px',
+        left: Math.max(10, px) + 'px',
+        top: py + 'px',
       }
       return
     }
@@ -774,6 +864,7 @@ function handleClick(event) {
     const point = waterHits[0].point
     addRipple3D(point.x, point.z, 15)
     addSplash3D(point.x, point.z, 10)
+    playSplashSound(10)
   }
 }
 
@@ -797,6 +888,7 @@ function animate() {
     decayHeat()
   }
 
+  controls.update()
   renderer.render(scene, camera)
 }
 
@@ -883,28 +975,32 @@ const checkApiStatus = async () => {
 .container {
   width: 100%;
   height: 100vh;
-  display: flex;
-  flex-direction: column;
   background: #0a1628;
   overflow: hidden;
 }
 
-.header {
-  padding: 15px 20px;
-  color: white;
+.header-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  padding: 12px 20px;
   text-align: center;
-  background: rgba(10, 22, 40, 0.9);
-  border-bottom: 1px solid rgba(100, 180, 255, 0.15);
+  color: white;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(10, 22, 40, 0.7) 0%, transparent 100%);
 }
 
-.header h1 {
-  font-size: 2em;
-  margin-bottom: 4px;
+.header-overlay h1 {
+  font-size: 1.8em;
+  margin-bottom: 2px;
   background: linear-gradient(90deg, #4af, #a8f, #4af);
   background-size: 200% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: shimmer 3s ease-in-out infinite;
+  text-shadow: none;
 }
 
 @keyframes shimmer {
@@ -912,15 +1008,15 @@ const checkApiStatus = async () => {
   50% { background-position: 200% center; }
 }
 
-.header p {
-  font-size: 0.95em;
-  opacity: 0.6;
+.header-overlay p {
+  font-size: 0.85em;
+  opacity: 0.5;
 }
 
 .main-content {
   display: flex;
-  flex: 1;
-  gap: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   position: relative;
 }
@@ -954,11 +1050,11 @@ const checkApiStatus = async () => {
     border-left: none;
     border-top: 1px solid rgba(100, 180, 255, 0.1);
   }
-  .header h1 {
-    font-size: 1.4em;
+  .header-overlay h1 {
+    font-size: 1.2em;
   }
-  .header {
-    padding: 10px;
+  .header-overlay {
+    padding: 8px;
   }
 }
 
