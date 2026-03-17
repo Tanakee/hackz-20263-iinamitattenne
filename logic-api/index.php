@@ -162,19 +162,22 @@ function handleCreatePost() {
 }
 
 function handleGetPosts() {
-    // テンプレート実装：Day 1でDBに接続
-    $posts = [
-        [
-            'id' => '1',
-            'text' => 'これはテスト投稿です',
-            'created_at' => date('Y-m-d H:i:s', time() - 3600),
-            'heat' => 10,
-            'weathered' => false
-        ]
-    ];
+    try {
+        $pdo = getDBConnection();
 
-    http_response_code(200);
-    echo json_encode($posts);
+        // postsテーブルから全件取得、作成日時の降順でソート
+        $stmt = $pdo->prepare("SELECT id, text, x, y, mass, heat, weathered, created_at FROM posts ORDER BY created_at DESC");
+        $stmt->execute();
+        $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // レスポンスとしてJSON配列を返却
+        http_response_code(200);
+        echo json_encode($posts);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to retrieve posts: ' . $e->getMessage()]);
+    }
 }
 
 function handleWeatheringCheck() {
