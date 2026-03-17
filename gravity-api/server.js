@@ -99,6 +99,27 @@ function calculateMass(text) {
   };
 }
 
+// --- VRリモート（スマホ↔VR間の共有ステート） ---
+let vrRemoteState = { text: '', exitRequested: false };
+
+app.get('/api/vr-remote', (req, res) => {
+  res.json(vrRemoteState);
+  // exitは一度読んだらリセット
+  if (vrRemoteState.exitRequested) {
+    vrRemoteState.exitRequested = false;
+  }
+});
+
+app.post('/api/vr-remote', (req, res) => {
+  const { action, text } = req.body;
+  if (action === 'setText') {
+    vrRemoteState.text = text || '';
+  } else if (action === 'exit') {
+    vrRemoteState.exitRequested = true;
+  }
+  res.json({ ok: true });
+});
+
 // エラーハンドリング
 app.use((err, req, res, next) => {
   console.error(err.stack);
