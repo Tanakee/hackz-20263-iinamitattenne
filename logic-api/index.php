@@ -4,6 +4,24 @@ header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');
 header('Access-Control-Allow-Headers: Content-Type');
 header('Content-Type: application/json');
 
+// DB接続関数（シングルトン）
+function getDBConnection() {
+    static $pdo = null;
+    if ($pdo === null) {
+        $host = getenv('DB_HOST') ?: 'db';
+        $user = getenv('DB_USER') ?: 'hackz_user';
+        $pass = getenv('DB_PASSWORD') ?: 'hackz_password';
+        $dbname = getenv('DB_NAME') ?: 'hackz_db';
+        try {
+            $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $pass);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch (PDOException $e) {
+            throw new Exception('Database connection failed: ' . $e->getMessage());
+        }
+    }
+    return $pdo;
+}
+
 // リクエストのパース
 $request_uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $request_method = $_SERVER['REQUEST_METHOD'];
@@ -14,6 +32,21 @@ switch ($request_uri) {
         if ($request_method === 'GET') {
             http_response_code(200);
             echo json_encode(['status' => 'Logic API is running!']);
+        }
+        break;
+
+    case '/test-db':
+        if ($request_method === 'GET') {
+            try {
+                $pdo = getDBConnection();
+                $stmt = $pdo->query("SELECT 1 as test");
+                $result = $stmt->fetch(PDO::FETCH_ASSOC);
+                http_response_code(200);
+                echo json_encode(['status' => 'DB connection successful', 'result' => $result]);
+            } catch (Exception $e) {
+                http_response_code(500);
+                echo json_encode(['error' => 'DB test failed: ' . $e->getMessage()]);
+            }
         }
         break;
 
