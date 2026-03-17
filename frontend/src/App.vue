@@ -92,6 +92,7 @@
           <button
             v-if="xrSupported"
             class="vr-btn"
+            :disabled="!xrActive && !postText.trim()"
             @click="toggleXR"
           >{{ xrActive ? 'VR終了' : 'VRで投げる' }}</button>
           <p v-if="xrActive" class="xr-hint">トリガーを握って振り、離すと投石</p>
@@ -102,10 +103,36 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import * as CANNON from 'cannon-es'
+
+// --- リモコンモード判定 ---
+const isRemoteMode = ref(new URLSearchParams(window.location.search).has('remote'))
+const remoteText = ref('')
+let remoteSendTimer = null
+
+// リモコン: テキスト変更をサーバーに送信（デバウンス）
+watch(remoteText, (val) => {
+  if (!isRemoteMode.value) return
+  clearTimeout(remoteSendTimer)
+  remoteSendTimer = setTimeout(() => {
+    fetch('/api/gravity/vr-remote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'setText', text: val })
+    }).catch(() => {})
+  }, 200)
+})
+
+function sendRemoteExit() {
+  fetch('/api/gravity/vr-remote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'exit' })
+  }).catch(() => {})
+}
 
 const threeContainer = ref(null)
 const postText = ref('')
@@ -361,6 +388,241 @@ function buildBridge() {
   }
 
   scene.add(bridge)
+}
+
+// --- VR内スマホパネル（インタラクティブ） ---
+let vrPhoneMesh = null
+let vrPhoneScreen = null  // レイキャスト対象の画面メッシュ
+let vrPhoneCanvas = null
+let vrPhoneCtx = null
+let vrPhoneTexture = null
+let vrPhoneLastText = ''
+let vrPhoneHoverIdx = -1  // ホバー中のボタンindex
+let vrPhoneLaser = null    // レーザーポインター
+const vrPhoneRaycaster = new THREE.Raycaster()
+
+// ひらがなキーボード配列
+const VR_KB_ROWS = [
+  ['あ','い','う','え','お','か','き','く','け','こ'],
+  ['さ','し','す','せ','そ','た','ち','つ','て','と'],
+  ['な','に','ぬ','ね','の','は','ひ','ふ','へ','ほ'],
+  ['ま','み','む','め','も','や','ゆ','よ','ら','り'],
+  ['る','れ','ろ','わ','を','ん','ー','！','？','。'],
+]
+// ボタン領域を動的に生成
+const VR_PHONE_BUTTONS = []
+const KB_TOP = 100  // キーボード開始Y
+const KB_KEY_W = 30
+const KB_KEY_H = 42
+const KB_PAD = 2
+for (let r = 0; r < VR_KB_ROWS.length; r++) {
+  for (let c = 0; c < VR_KB_ROWS[r].length; c++) {
+    VR_PHONE_BUTTONS.push({
+      x: 4 + c * (KB_KEY_W + KB_PAD), y: KB_TOP + r * (KB_KEY_H + KB_PAD),
+      w: KB_KEY_W, h: KB_KEY_H,
+      type: 'key', char: VR_KB_ROWS[r][c],
+    })
+  }
+}
+// 機能キー行
+const FUNC_Y = KB_TOP + 5 * (KB_KEY_H + KB_PAD) + 6
+VR_PHONE_BUTTONS.push({ x: 4, y: FUNC_Y, w: 62, h: 38, type: 'backspace' })
+VR_PHONE_BUTTONS.push({ x: 70, y: FUNC_Y, w: 62, h: 38, type: 'space' })
+VR_PHONE_BUTTONS.push({ x: 136, y: FUNC_Y, w: 62, h: 38, type: 'clear' })
+VR_PHONE_BUTTONS.push({ x: 202, y: FUNC_Y, w: 112, h: 38, type: 'exit' })
+
+function buildVRPhone() {
+  vrPhoneCanvas = document.createElement('canvas')
+  vrPhoneCanvas.width = 320
+  vrPhoneCanvas.height = 480
+  vrPhoneCtx = vrPhoneCanvas.getContext('2d')
+  vrPhoneTexture = new THREE.CanvasTexture(vrPhoneCanvas)
+  vrPhoneTexture.minFilter = THREE.LinearFilter
+
+  const phoneGroup = new THREE.Group()
+
+  // 画面（レイキャスト対象）
+  const screenGeo = new THREE.PlaneGeometry(0.35, 0.52)
+  const screenMat = new THREE.MeshBasicMaterial({ map: vrPhoneTexture })
+  vrPhoneScreen = new THREE.Mesh(screenGeo, screenMat)
+  vrPhoneScreen.position.z = 0.011
+  phoneGroup.add(vrPhoneScreen)
+
+  // 筐体
+  const frameGeo = new THREE.BoxGeometry(0.38, 0.56, 0.02)
+  const frameMat = new THREE.MeshPhongMaterial({ color: 0x222222 })
+  phoneGroup.add(new THREE.Mesh(frameGeo, frameMat))
+
+  phoneGroup.position.set(-0.25, BRIDGE_Y + 0.9, BRIDGE_Z - 0.5)
+  phoneGroup.rotation.set(-0.3, 0.4, 0)
+
+  scene.add(phoneGroup)
+  vrPhoneMesh = phoneGroup
+
+  // レーザーポインター（コントローラーから出る線）
+  const laserGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -3),
+  ])
+  const laserMat = new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 })
+  vrPhoneLaser = new THREE.Line(laserGeo, laserMat)
+  vrPhoneLaser.visible = false
+  scene.add(vrPhoneLaser)
+
+  updateVRPhoneScreen()
+}
+
+function updateVRPhoneScreen() {
+  if (!vrPhoneCtx) return
+  const ctx = vrPhoneCtx
+  const w = 320, h = 480
+  const text = postText.value || ''
+
+  // 背景
+  ctx.fillStyle = '#0f1a2e'
+  ctx.fillRect(0, 0, w, h)
+
+  // テキスト表示エリア
+  ctx.fillStyle = '#0a1222'
+  ctx.fillRect(4, 4, w - 8, 88)
+  ctx.strokeStyle = text ? '#4488ff' : '#334466'
+  ctx.lineWidth = 2
+  ctx.strokeRect(4, 4, w - 8, 88)
+
+  if (text) {
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '15px sans-serif'
+    ctx.textAlign = 'left'
+    const maxW = w - 20
+    let line = '', ly = 24
+    for (const ch of text) {
+      const test = line + ch
+      if (ctx.measureText(test).width > maxW) {
+        ctx.fillText(line, 12, ly)
+        line = ch; ly += 18
+        if (ly > 80) break
+      } else { line = test }
+    }
+    if (line && ly <= 80) ctx.fillText(line, 12, ly)
+    // カーソル点滅
+    const cursorX = 12 + ctx.measureText(line).width + 2
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      ctx.fillStyle = '#4488ff'
+      ctx.fillRect(cursorX, ly - 12, 2, 16)
+    }
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.25)'
+    ctx.font = '13px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('ここに文章が表示されます', w / 2, 50)
+  }
+
+  // キーボード
+  for (let i = 0; i < VR_PHONE_BUTTONS.length; i++) {
+    const btn = VR_PHONE_BUTTONS[i]
+    const isHover = vrPhoneHoverIdx === i
+
+    if (btn.type === 'key') {
+      ctx.fillStyle = isHover ? 'rgba(68,136,255,0.4)' : 'rgba(255,255,255,0.1)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 4)
+      ctx.fill()
+      ctx.fillStyle = isHover ? '#ffffff' : 'rgba(255,255,255,0.8)'
+      ctx.font = '16px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(btn.char, btn.x + btn.w / 2, btn.y + btn.h / 2 + 6)
+    } else if (btn.type === 'backspace') {
+      ctx.fillStyle = isHover ? 'rgba(255,160,60,0.5)' : 'rgba(255,160,60,0.2)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#ffcc88'
+      ctx.font = '13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('削除', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'space') {
+      ctx.fillStyle = isHover ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'
+      ctx.font = '13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('空白', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'clear') {
+      ctx.fillStyle = isHover ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.5)'
+      ctx.font = '13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('全消', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'exit') {
+      ctx.fillStyle = isHover ? 'rgba(255,80,80,0.5)' : 'rgba(255,80,80,0.25)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#ffaaaa'
+      ctx.font = 'bold 14px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('VR終了', btn.x + btn.w / 2, btn.y + 24)
+    }
+  }
+
+  vrPhoneTexture.needsUpdate = true
+  vrPhoneLastText = text
+}
+
+// コントローラーからレイキャストしてスマホ画面のUVを取得
+function vrPhoneRaycast(worldPos, controllerQuat) {
+  if (!vrPhoneScreen) return null
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(controllerQuat)
+  vrPhoneRaycaster.set(worldPos, dir)
+
+  // レーザー表示
+  if (vrPhoneLaser) {
+    vrPhoneLaser.position.copy(worldPos)
+    vrPhoneLaser.quaternion.copy(controllerQuat)
+    vrPhoneLaser.visible = true
+  }
+
+  const hits = vrPhoneRaycaster.intersectObject(vrPhoneScreen, false)
+  if (hits.length > 0 && hits[0].uv) {
+    const uv = hits[0].uv
+    // UV → Canvas座標に変換
+    const cx = uv.x * 320
+    const cy = (1 - uv.y) * 480
+    return { cx, cy }
+  }
+  return null
+}
+
+function vrPhoneHitTest(cx, cy) {
+  for (let i = 0; i < VR_PHONE_BUTTONS.length; i++) {
+    const b = VR_PHONE_BUTTONS[i]
+    if (cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h) {
+      return i
+    }
+  }
+  return -1
+}
+
+function vrPhonePress(btnIdx) {
+  if (btnIdx < 0) return
+  const btn = VR_PHONE_BUTTONS[btnIdx]
+  if (btn.type === 'key') {
+    postText.value += btn.char
+  } else if (btn.type === 'backspace') {
+    postText.value = postText.value.slice(0, -1)
+  } else if (btn.type === 'space') {
+    postText.value += '　'
+  } else if (btn.type === 'exit') {
+    xrSession?.end()
+  } else if (btn.type === 'clear') {
+    postText.value = ''
+  }
+  updateVRPhoneScreen()
 }
 
 function initThree() {
@@ -1246,6 +1508,7 @@ let xrRefSpace = null
 let xrGripPose = null
 let xrPrevPos = null
 let xrCameraRig = null  // カメラリグ（VR俯瞰視点用）
+let xrRemotePollTimer = null  // リモコンポーリング用
 let xrGrabbing = false
 let xrGrabFrames = 0
 let xrVelocity = new THREE.Vector3()
@@ -1253,6 +1516,7 @@ let xrPeakSpeed = 0
 let xrPeakVelocity = new THREE.Vector3()
 let xrStoneMesh = null  // 手に持っている石のメッシュ
 let xrHandMesh = null   // 手のモデル
+let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
 const VR_PHRASES = [
   'VRから一石！',
   '波紋を広げよ',
@@ -1320,6 +1584,9 @@ async function toggleXR() {
     xrHandMesh = createHandMesh()
     scene.add(xrHandMesh)
 
+    // VR内スマホパネルを生成
+    buildVRPhone()
+
     renderer.xr.enabled = true
     renderer.xr.setSession(xrSession)
 
@@ -1327,6 +1594,7 @@ async function toggleXR() {
       xrActive.value = false
       xrSession = null
       renderer.xr.enabled = false
+      if (xrRemotePollTimer) { clearInterval(xrRemotePollTimer); xrRemotePollTimer = null }
       // カメラリグを解除してカメラをシーンに戻す
       if (xrCameraRig) {
         xrCameraRig.remove(camera)
@@ -1339,6 +1607,8 @@ async function toggleXR() {
       // 手持ち石・手モデルを消す
       if (xrStoneMesh) { scene.remove(xrStoneMesh); xrStoneMesh = null }
       if (xrHandMesh) { scene.remove(xrHandMesh); xrHandMesh = null }
+      if (vrPhoneMesh) { scene.remove(vrPhoneMesh); vrPhoneMesh = null; vrPhoneScreen = null }
+      if (vrPhoneLaser) { scene.remove(vrPhoneLaser); vrPhoneLaser = null }
     })
 
     renderer.setAnimationLoop(xrAnimateLoop)
@@ -1390,22 +1660,46 @@ function xrAnimateLoop(timestamp, frame) {
       xrPrevPos = xrPos.clone()
 
       // 手モデルをコントローラー位置に追従
+      const q = pose.transform.orientation
+      const controllerQuat = new THREE.Quaternion(q.x, q.y, q.z, q.w)
       if (xrHandMesh) {
         xrHandMesh.position.copy(worldPos)
-        // コントローラーの回転も反映
-        const q = pose.transform.orientation
-        xrHandMesh.quaternion.set(q.x, q.y, q.z, q.w)
+        xrHandMesh.quaternion.copy(controllerQuat)
       }
 
-      // グリップ or トリガー（両方対応）
       const gamepad = controllerSource.gamepad
-      const gripValue = gamepad
-        ? Math.max(gamepad.buttons[1]?.value ?? 0, gamepad.buttons[0]?.value ?? 0)
-        : 0
+
+      // --- スマホ操作（トリガー = buttons[0]でポイント＆クリック） ---
+      const triggerValue = gamepad ? (gamepad.buttons[0]?.value ?? 0) : 0
+      const triggerPressed = triggerValue > 0.5
+
+      // レイキャストでスマホ画面をホバー
+      const phoneHit = vrPhoneRaycast(worldPos, controllerQuat)
+      if (phoneHit) {
+        const hitIdx = vrPhoneHitTest(phoneHit.cx, phoneHit.cy)
+        if (hitIdx !== vrPhoneHoverIdx) {
+          vrPhoneHoverIdx = hitIdx
+          updateVRPhoneScreen()
+        }
+        // トリガー押した瞬間にボタン実行
+        if (triggerPressed && !xrTriggerWasPressed && hitIdx >= 0) {
+          vrPhonePress(hitIdx)
+        }
+      } else {
+        if (vrPhoneHoverIdx !== -1) {
+          vrPhoneHoverIdx = -1
+          updateVRPhoneScreen()
+        }
+        if (vrPhoneLaser) vrPhoneLaser.visible = false
+      }
+      xrTriggerWasPressed = triggerPressed
+
+      // --- 石の掴み＆投げ（グリップ = buttons[1]） ---
+      const gripValue = gamepad ? (gamepad.buttons[1]?.value ?? 0) : 0
       const gripPressed = gripValue > 0.5
 
-      if (gripPressed && !xrGrabbing && !isFlying.value) {
-        // 掴み開始 → 手元に石を生成
+      if (gripPressed && !xrGrabbing && !isFlying.value && postText.value.trim()) {
+        // 掴み開始 → テキストがある時だけ手元に石を生成
         xrGrabbing = true
         xrGrabFrames = 0
         xrPeakSpeed = 0
@@ -1496,13 +1790,19 @@ function xrAnimateLoop(timestamp, frame) {
     }
   }
 
+  // VR内スマホ画面を更新（テキスト変更時のみ）
+  if (vrPhoneCtx && postText.value !== vrPhoneLastText) {
+    updateVRPhoneScreen()
+  }
+
   renderer.render(scene, camera)
 }
 
 function xrSubmitPost(targetX, targetZ, fromPos = null) {
   if (isFlying.value) return
   // テキスト入力があればそれを使う、なければVR定型文
-  const text = postText.value.trim() || VR_PHRASES[Math.floor(Math.random() * VR_PHRASES.length)]
+  const text = postText.value.trim()
+  if (!text) return
 
   // 即座にフォールバック値で投げる（API待ちなし）
   const fallbackMass = text.length * 0.1 + (text.match(/[！!？?]/g) || []).length * 20
@@ -1929,6 +2229,75 @@ textarea::placeholder {
   margin-top: 4px;
   font-size: 0.75rem;
   color: rgba(200, 184, 255, 0.7);
+}
+
+/* --- VRリモコン（スマホ用） --- */
+.remote-container {
+  width: 100%;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0a1628 0%, #1a2a4a 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+  color: white;
+  box-sizing: border-box;
+}
+.remote-title {
+  font-size: 1.8rem;
+  margin: 0 0 4px;
+  background: linear-gradient(90deg, #88bbff, #aaddff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.remote-sub {
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.5);
+  margin: 0 0 24px;
+}
+.remote-textarea {
+  width: 100%;
+  max-width: 400px;
+  min-height: 120px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 2px solid rgba(100, 180, 255, 0.3);
+  background: rgba(255,255,255,0.08);
+  color: white;
+  font-size: 1.1rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.3s;
+}
+.remote-textarea:focus {
+  border-color: rgba(100, 180, 255, 0.7);
+}
+.remote-textarea::placeholder {
+  color: rgba(255,255,255,0.3);
+}
+.remote-status {
+  margin: 16px 0;
+  font-size: 0.95rem;
+}
+.status-ok {
+  color: #66ff88;
+}
+.status-wait {
+  color: rgba(255,255,255,0.4);
+}
+.remote-exit-btn {
+  margin-top: 32px;
+  padding: 14px 40px;
+  background: rgba(255, 80, 80, 0.3);
+  border: 1px solid rgba(255, 80, 80, 0.5);
+  color: #ffaaaa;
+  border-radius: 10px;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.remote-exit-btn:hover {
+  background: rgba(255, 80, 80, 0.5);
 }
 
 </style>
