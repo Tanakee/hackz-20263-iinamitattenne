@@ -89,6 +89,12 @@
           <h3>ステータス</h3>
           <p>投稿数: {{ posts.length }}</p>
           <p>API接続: {{ apiStatus }}</p>
+          <button
+            v-if="xrSupported"
+            class="vr-btn"
+            @click="toggleXR"
+          >{{ xrActive ? 'VR終了' : 'VRで投げる' }}</button>
+          <p v-if="xrActive" class="xr-hint">トリガーを握って振り、離すと投石</p>
         </div>
       </div>
     </div>
@@ -301,6 +307,62 @@ function massColor(mass) {
 }
 
 // --- Three.js 初期化 ---
+const BRIDGE_Z = WATER_SIZE / 2 + 1  // 池の手前端（少し前に出す）
+const BRIDGE_Y = 3  // 橋の高さ
+
+function buildBridge() {
+  const bridge = new THREE.Group()
+  const woodColor = 0x8B5E3C
+  const darkWood = 0x5C3A1E
+
+  // 橋板（メインデッキ）
+  const deckGeo = new THREE.BoxGeometry(8, 0.2, 2.5)
+  const deckMat = new THREE.MeshPhongMaterial({ color: woodColor, flatShading: true })
+  const deck = new THREE.Mesh(deckGeo, deckMat)
+  deck.position.set(0, BRIDGE_Y, BRIDGE_Z)
+  bridge.add(deck)
+
+  // 横板の隙間表現（暗い板を少しずらして重ねる）
+  for (let i = -3; i <= 3; i++) {
+    const plankGeo = new THREE.BoxGeometry(0.02, 0.22, 2.5)
+    const plankMat = new THREE.MeshPhongMaterial({ color: darkWood })
+    const plank = new THREE.Mesh(plankGeo, plankMat)
+    plank.position.set(i * 1.14, BRIDGE_Y, BRIDGE_Z)
+    bridge.add(plank)
+  }
+
+  // 手すり（左右）
+  const railMat = new THREE.MeshPhongMaterial({ color: darkWood })
+  for (const side of [-1, 1]) {
+    // 手すりの横棒
+    const railGeo = new THREE.BoxGeometry(8, 0.1, 0.1)
+    const rail = new THREE.Mesh(railGeo, railMat)
+    rail.position.set(0, BRIDGE_Y + 1, BRIDGE_Z + side * 1.2)
+    bridge.add(rail)
+
+    // 支柱
+    for (let x = -4; x <= 4; x += 2) {
+      const postGeo = new THREE.BoxGeometry(0.12, 1, 0.12)
+      const post = new THREE.Mesh(postGeo, railMat)
+      post.position.set(x, BRIDGE_Y + 0.5, BRIDGE_Z + side * 1.2)
+      bridge.add(post)
+    }
+  }
+
+  // 脚（4本）
+  const legMat = new THREE.MeshPhongMaterial({ color: darkWood })
+  for (const x of [-3.5, 3.5]) {
+    for (const z of [-0.8, 0.8]) {
+      const legGeo = new THREE.CylinderGeometry(0.12, 0.15, BRIDGE_Y + 1, 6)
+      const leg = new THREE.Mesh(legGeo, legMat)
+      leg.position.set(x, (BRIDGE_Y - 1) / 2, BRIDGE_Z + z)
+      bridge.add(leg)
+    }
+  }
+
+  scene.add(bridge)
+}
+
 function initThree() {
   const container = threeContainer.value
   const w = container.clientWidth
@@ -345,6 +407,9 @@ function initThree() {
   const warmLight = new THREE.PointLight(0xff8844, 0.6, 50)
   warmLight.position.set(5, 8, -5)
   scene.add(warmLight)
+
+  // 橋（VR投石用）
+  buildBridge()
 
   // 水面メッシュ
   waterGeo = new THREE.PlaneGeometry(WATER_SIZE, WATER_SIZE, WATER_SEG, WATER_SEG)
@@ -880,10 +945,10 @@ function updateWaterColumns(dt) {
 }
 
 // --- 石の投げアニメーション ---
-function throwStone(targetX, targetZ, mass, text, scale = 30) {
-  const startX = -WATER_SIZE / 2 + 2
-  const startY = 8
-  const startZ = WATER_SIZE / 2 - 2
+function throwStone(targetX, targetZ, mass, text, scale = 30, fromPos = null) {
+  const startX = fromPos ? fromPos.x : -WATER_SIZE / 2 + 2
+  const startY = fromPos ? fromPos.y : 8
+  const startZ = fromPos ? fromPos.z : WATER_SIZE / 2 - 2
 
   const size = 0.3 + scale * 0.025
   const color = massColor(mass)
@@ -1120,6 +1185,7 @@ onMounted(() => {
   initThree()
   animate()
   checkApiStatus()
+  checkXRSupport()
   window.addEventListener('resize', onResize)
 })
 
@@ -1170,6 +1236,279 @@ const submitPost = async () => {
   } finally {
     isSubmitting.value = false
   }
+}
+
+// --- WebXR (Pico コントローラーで投石) ---
+const xrSupported = ref(false)
+const xrActive = ref(false)
+let xrSession = null
+let xrRefSpace = null
+let xrGripPose = null
+let xrPrevPos = null
+let xrCameraRig = null  // カメラリグ（VR俯瞰視点用）
+let xrGrabbing = false
+let xrGrabFrames = 0
+let xrVelocity = new THREE.Vector3()
+let xrPeakSpeed = 0
+let xrPeakVelocity = new THREE.Vector3()
+let xrStoneMesh = null  // 手に持っている石のメッシュ
+let xrHandMesh = null   // 手のモデル
+const VR_PHRASES = [
+  'VRから一石！',
+  '波紋を広げよ',
+  '議論に参戦',
+  '異議あり！',
+  'これは譲れない',
+  '世界は変わる',
+  '人類の未来を考える',
+]
+
+function createHandMesh() {
+  const hand = new THREE.Group()
+  const skinColor = 0xdeb896
+  const skinMat = new THREE.MeshPhongMaterial({ color: skinColor, flatShading: true })
+
+  // 手のひら
+  const palmGeo = new THREE.BoxGeometry(0.08, 0.03, 0.10)
+  const palm = new THREE.Mesh(palmGeo, skinMat)
+  hand.add(palm)
+
+  // 指5本
+  const fingerOffsets = [
+    { x: -0.03, z: -0.07, len: 0.06, rot: 0 },      // 小指
+    { x: -0.015, z: -0.075, len: 0.07, rot: 0 },     // 薬指
+    { x: 0, z: -0.08, len: 0.075, rot: 0 },           // 中指
+    { x: 0.015, z: -0.075, len: 0.07, rot: 0 },       // 人差し指
+    { x: 0.04, z: -0.03, len: 0.045, rot: 0.5 },      // 親指
+  ]
+  for (const f of fingerOffsets) {
+    const fingerGeo = new THREE.BoxGeometry(0.015, 0.015, f.len)
+    const finger = new THREE.Mesh(fingerGeo, skinMat)
+    finger.position.set(f.x, 0, f.z - f.len / 2)
+    finger.rotation.y = f.rot
+    hand.add(finger)
+  }
+
+  return hand
+}
+
+async function checkXRSupport() {
+  if (navigator.xr) {
+    xrSupported.value = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)
+  }
+}
+
+async function toggleXR() {
+  if (xrActive.value) {
+    xrSession?.end()
+    return
+  }
+  try {
+    xrSession = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'hand-tracking'],
+    })
+    xrActive.value = true
+    xrRefSpace = await xrSession.requestReferenceSpace('local-floor')
+
+    // カメラリグを橋の上に配置（橋から池を見下ろして投げる）
+    xrCameraRig = new THREE.Group()
+    xrCameraRig.position.set(0, BRIDGE_Y + 0.2, BRIDGE_Z)
+    scene.add(xrCameraRig)
+    xrCameraRig.add(camera)
+
+    // 手モデルを生成
+    xrHandMesh = createHandMesh()
+    scene.add(xrHandMesh)
+
+    renderer.xr.enabled = true
+    renderer.xr.setSession(xrSession)
+
+    xrSession.addEventListener('end', () => {
+      xrActive.value = false
+      xrSession = null
+      renderer.xr.enabled = false
+      // カメラリグを解除してカメラをシーンに戻す
+      if (xrCameraRig) {
+        xrCameraRig.remove(camera)
+        scene.remove(xrCameraRig)
+        scene.add(camera)
+        camera.position.set(0, 18, 22)
+        camera.lookAt(0, 0, 0)
+        xrCameraRig = null
+      }
+      // 手持ち石・手モデルを消す
+      if (xrStoneMesh) { scene.remove(xrStoneMesh); xrStoneMesh = null }
+      if (xrHandMesh) { scene.remove(xrHandMesh); xrHandMesh = null }
+    })
+
+    renderer.setAnimationLoop(xrAnimateLoop)
+  } catch (e) {
+    console.warn('WebXR開始失敗:', e)
+  }
+}
+
+function xrAnimateLoop(timestamp, frame) {
+  if (!frame) return
+  const dt = Math.min(clock.getDelta(), 0.05)
+  const elapsed = clock.getElapsedTime()
+
+  // 通常の更新処理
+  updateWater(elapsed)
+  updateRipples(dt)
+  updateSplashes(dt)
+  updateWaterColumns(dt)
+  updateStones(elapsed, dt)
+  updateFlyingStone(dt)
+  decayTimer += dt
+  if (decayTimer > 2) { decayTimer = 0; decayHeat() }
+
+  // コントローラー処理（掴んで投げる方式）
+  // 最初に見つけたgripSpace付きコントローラーだけ処理（2本混在防止）
+  const session = frame.session
+  let controllerSource = null
+  for (const source of session.inputSources) {
+    if (source.gripSpace) { controllerSource = source; break }
+  }
+  if (controllerSource) {
+    const pose = frame.getPose(controllerSource.gripSpace, xrRefSpace)
+    if (pose) {
+      // XR空間でのコントローラー位置（リグオフセットなし＝速度計算用）
+      const xrPos = new THREE.Vector3(
+        pose.transform.position.x,
+        pose.transform.position.y,
+        pose.transform.position.z
+      )
+
+      // ワールド座標（リグの位置を加算）
+      const rigOffset = xrCameraRig ? xrCameraRig.position : new THREE.Vector3()
+      const worldPos = xrPos.clone().add(rigOffset)
+
+      // 速度はXR空間の差分で計算（リグは動かないので同じ）
+      if (xrPrevPos) {
+        xrVelocity.subVectors(xrPos, xrPrevPos).divideScalar(dt || 1 / 72)
+      }
+      xrPrevPos = xrPos.clone()
+
+      // 手モデルをコントローラー位置に追従
+      if (xrHandMesh) {
+        xrHandMesh.position.copy(worldPos)
+        // コントローラーの回転も反映
+        const q = pose.transform.orientation
+        xrHandMesh.quaternion.set(q.x, q.y, q.z, q.w)
+      }
+
+      // グリップ or トリガー（両方対応）
+      const gamepad = controllerSource.gamepad
+      const gripValue = gamepad
+        ? Math.max(gamepad.buttons[1]?.value ?? 0, gamepad.buttons[0]?.value ?? 0)
+        : 0
+      const gripPressed = gripValue > 0.5
+
+      if (gripPressed && !xrGrabbing && !isFlying.value) {
+        // 掴み開始 → 手元に石を生成
+        xrGrabbing = true
+        xrGrabFrames = 0
+        xrPeakSpeed = 0
+        xrPeakVelocity.set(0, 0, 0)
+
+        if (!xrStoneMesh) {
+          const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
+          const verts = stoneGeo.attributes.position
+          for (let i = 0; i < verts.count; i++) {
+            verts.setY(i, verts.getY(i) * 0.5)
+            const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
+            verts.setX(i, verts.getX(i) * n)
+            verts.setZ(i, verts.getZ(i) * n)
+          }
+          stoneGeo.computeVertexNormals()
+
+          // MeshBasicMaterialならライティング不要で確実に見える
+          const stoneMat = new THREE.MeshBasicMaterial({ color: 0x66bbff })
+          xrStoneMesh = new THREE.Mesh(stoneGeo, stoneMat)
+
+          // 光る球体（グロー）
+          const glowGeo = new THREE.SphereGeometry(0.08, 12, 8)
+          const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x4488ff,
+            transparent: true,
+            opacity: 0.3,
+          })
+          const glow = new THREE.Mesh(glowGeo, glowMat)
+          glow.name = 'glow'
+          xrStoneMesh.add(glow)
+
+          scene.add(xrStoneMesh)
+        }
+      } else if (gripPressed && xrGrabbing) {
+        // 掴み中 → 石を手のワールド座標に追従
+        xrGrabFrames++
+        if (xrStoneMesh) {
+          xrStoneMesh.position.copy(worldPos)
+          // グローを脈動
+          const glow = xrStoneMesh.getObjectByName('glow')
+          if (glow) {
+            const pulse = 1 + Math.sin(elapsed * 8) * 0.3
+            glow.scale.set(pulse, pulse, pulse)
+          }
+        }
+        const speed = xrVelocity.length()
+        if (speed > xrPeakSpeed) {
+          xrPeakSpeed = speed
+          xrPeakVelocity.copy(xrVelocity)
+        }
+      } else if (!gripPressed && xrGrabbing) {
+        // 離した → 投石！
+        xrGrabbing = false
+        const releaseWorldPos = xrStoneMesh ? xrStoneMesh.position.clone() : worldPos.clone()
+
+        // 手持ち石を消す
+        if (xrStoneMesh) {
+          scene.remove(xrStoneMesh)
+          xrStoneMesh = null
+        }
+
+        if (xrGrabFrames >= 2 && xrPeakSpeed > 0.3) {
+          // 速度のXZ成分（水平方向のみ）で投げ方向を決定
+          const flatVel = new THREE.Vector2(xrPeakVelocity.x, xrPeakVelocity.z)
+          const flatSpeed = flatVel.length()
+
+          let dirX, dirZ
+          if (flatSpeed > 0.05) {
+            // 水平方向の速度がある → その方向に飛ばす
+            dirX = flatVel.x / flatSpeed
+            dirZ = flatVel.y / flatSpeed
+          } else {
+            // ほぼ真下に振った → 正面（-Z方向）に飛ばす
+            dirX = 0
+            dirZ = -1
+          }
+
+          // 速度に応じて飛距離が変わる（弱く→近く、強く→遠く）
+          const distance = THREE.MathUtils.lerp(2, WATER_SIZE * 0.45, Math.min(xrPeakSpeed / 3, 1))
+
+          const halfW = WATER_SIZE * 0.45
+          const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
+          const targetZ = THREE.MathUtils.clamp(dirZ * distance, -halfW, halfW)
+
+          xrSubmitPost(targetX, targetZ, releaseWorldPos)
+        }
+      }
+    }
+  }
+
+  renderer.render(scene, camera)
+}
+
+function xrSubmitPost(targetX, targetZ, fromPos = null) {
+  if (isFlying.value) return
+  // テキスト入力があればそれを使う、なければVR定型文
+  const text = postText.value.trim() || VR_PHRASES[Math.floor(Math.random() * VR_PHRASES.length)]
+
+  // 即座にフォールバック値で投げる（API待ちなし）
+  const fallbackMass = text.length * 0.1 + (text.match(/[！!？?]/g) || []).length * 20
+  const fallbackScale = 30
+  throwStone(targetX, targetZ, fallbackMass, text, fallbackScale, fromPos)
+  postText.value = ''
 }
 
 // --- API接続確認 ---
@@ -1570,4 +1909,26 @@ textarea::placeholder {
   background: rgba(100, 180, 255, 0.2);
   border-radius: 2px;
 }
+
+.vr-btn {
+  margin-top: 8px;
+  padding: 6px 14px;
+  background: rgba(120, 80, 255, 0.3);
+  border: 1px solid rgba(120, 80, 255, 0.5);
+  color: #c8b8ff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+.vr-btn:hover {
+  background: rgba(120, 80, 255, 0.5);
+}
+
+.xr-hint {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: rgba(200, 184, 255, 0.7);
+}
+
 </style>
