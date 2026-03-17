@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 
 const app = express();
 const PORT = 8080;
+const NLP_API_URL = process.env.NLP_API_URL || 'http://localhost:8001';
 
 // ミドルウェア
 app.use(cors());
@@ -18,7 +19,7 @@ app.get('/api/health', (req, res) => {
 const MIN_TEXT_LENGTH = 3;
 
 // 質量計算エンドポイント
-app.post('/api/calculate-mass', (req, res) => {
+app.post('/api/calculate-mass', async (req, res) => {
   try {
     const { text } = req.body;
 
@@ -27,18 +28,39 @@ app.post('/api/calculate-mass', (req, res) => {
     }
 
     if (text.trim().length < MIN_TEXT_LENGTH) {
-      return res.status(400).json({ 
-        error: `Text must be at least ${MIN_TEXT_LENGTH} characters long` 
+      return res.status(400).json({
+        error: `Text must be at least ${MIN_TEXT_LENGTH} characters long`
       });
     }
 
     const result = calculateMass(text);
 
+    // NLP APIで主語のデカさを取得
+    let subjectScale = 30;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const nlpRes = await fetch(`${NLP_API_URL}/subject-scale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (nlpRes.ok) {
+        const nlpData = await nlpRes.json();
+        subjectScale = nlpData.max_scale;
+      }
+    } catch (e) {
+      console.warn('NLP API unreachable, using default scale:', e.message);
+    }
+
     res.json({
       mass: result.total_mass,
       message: '質量を計算しました',
       text_length: text.length,
-      gravity: result.total_mass * 0.1, // 重力値（簡易計算）
+      gravity: result.total_mass * 0.1,
+      subject_scale: subjectScale,
       breakdown: {
         base_mass: result.base_mass,
         emotion_bonus: result.emotion_bonus,

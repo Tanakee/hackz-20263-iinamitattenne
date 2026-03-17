@@ -16,6 +16,7 @@
           <p class="popup-text">{{ selectedPost.text }}</p>
           <div class="popup-stats">
             <span>質量 {{ selectedPost.mass }}</span>
+            <span>主語 {{ selectedPost.scale ?? '—' }}</span>
             <span>熱量 {{ selectedPost.heat }}</span>
             <span>いいね {{ selectedPost.likes || 0 }}</span>
           </div>
@@ -50,6 +51,7 @@
             <p class="list-item-text">{{ p.text }}</p>
             <div class="list-item-meta">
               <span>質量 {{ p.mass }}</span>
+              <span>主語 {{ p.scale ?? '—' }}</span>
               <span>熱量 {{ p.heat }}</span>
             </div>
           </div>
@@ -79,7 +81,7 @@
             </button>
           </div>
           <p v-if="lastMass !== null" class="mass-result">
-            質量: {{ lastMass }} / 重力: {{ lastGravity }}
+            質量: {{ lastMass }} / 重力: {{ lastGravity }} / 主語: {{ lastScale }}
           </p>
         </div>
 
@@ -104,6 +106,7 @@ const apiStatus = ref('確認中...')
 const isSubmitting = ref(false)
 const lastMass = ref(null)
 const lastGravity = ref(null)
+const lastScale = ref(null)
 
 // --- UI状態 ---
 const selectedPost = ref(null)
@@ -121,12 +124,14 @@ function initAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
 }
 
-function playSplashSound(mass) {
+function playSplashSound(mass, scale = 30) {
   if (!audioCtx) return
   const now = audioCtx.currentTime
+  const s = scale / 100 // 0〜1に正規化
 
-  // ノイズバースト（水しぶき）
-  const bufferSize = audioCtx.sampleRate * 0.15
+  // ノイズバースト（水しぶき）— スケール大 → 長い
+  const noiseDuration = 0.08 + s * 0.2
+  const bufferSize = Math.floor(audioCtx.sampleRate * noiseDuration)
   const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate)
   const data = buffer.getChannelData(0)
   for (let i = 0; i < bufferSize; i++) {
@@ -135,26 +140,26 @@ function playSplashSound(mass) {
   const noise = audioCtx.createBufferSource()
   noise.buffer = buffer
 
-  // 低音（ドボン）
+  // 低音（ドボン）— スケール大 → 低く重い音
   const osc = audioCtx.createOscillator()
   osc.type = 'sine'
-  osc.frequency.setValueAtTime(80 + mass * 0.5, now)
-  osc.frequency.exponentialRampToValueAtTime(30, now + 0.3)
+  osc.frequency.setValueAtTime(120 - s * 70, now)  // 120Hz(小) → 50Hz(大)
+  osc.frequency.exponentialRampToValueAtTime(20 + (1 - s) * 20, now + 0.3 + s * 0.2)
 
-  // ゲイン
+  // ゲイン — スケール大 → 大きい音
   const noiseGain = audioCtx.createGain()
-  noiseGain.gain.setValueAtTime(0.15, now)
-  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2)
+  noiseGain.gain.setValueAtTime(0.1 + s * 0.15, now)
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, now + noiseDuration + 0.05)
 
   const oscGain = audioCtx.createGain()
-  oscGain.gain.setValueAtTime(0.1 + mass * 0.002, now)
-  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4)
+  oscGain.gain.setValueAtTime(0.08 + s * 0.22, now)
+  oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4 + s * 0.3)
 
-  // フィルタ（水っぽさ）
+  // フィルタ — スケール大 → 低めのカットオフ（重い音）
   const filter = audioCtx.createBiquadFilter()
   filter.type = 'lowpass'
-  filter.frequency.setValueAtTime(2000, now)
-  filter.frequency.exponentialRampToValueAtTime(400, now + 0.2)
+  filter.frequency.setValueAtTime(2500 - s * 1500, now)
+  filter.frequency.exponentialRampToValueAtTime(300, now + noiseDuration)
 
   noise.connect(filter)
   filter.connect(noiseGain)
@@ -163,9 +168,9 @@ function playSplashSound(mass) {
   oscGain.connect(audioCtx.destination)
 
   noise.start(now)
-  noise.stop(now + 0.2)
+  noise.stop(now + noiseDuration + 0.05)
   osc.start(now)
-  osc.stop(now + 0.4)
+  osc.stop(now + 0.5 + s * 0.3)
 }
 
 function playLikeSound() {
@@ -201,10 +206,10 @@ const posts = ref([])
 
 function loadMockPosts() {
   posts.value = [
-    { id: 1, text: 'SNSの即時性は本当に必要なのか？', x: -0.4, z: -0.3, mass: 65, heat: 40, likes: 12, weathered: 0.0 },
-    { id: 2, text: 'もっとゆっくり議論したい', x: 0.2, z: 0.2, mass: 30, heat: 10, likes: 3, weathered: 0.2 },
-    { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0 },
-    { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4 },
+    { id: 1, text: 'SNSの即時性は本当に必要なのか？', x: -0.4, z: -0.3, mass: 65, heat: 40, likes: 12, weathered: 0.0, scale: 60 },
+    { id: 2, text: 'もっとゆっくり議論したい', x: 0.2, z: 0.2, mass: 30, heat: 10, likes: 3, weathered: 0.2, scale: 15 },
+    { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0, scale: 85 },
+    { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4, scale: 40 },
   ]
 }
 
@@ -240,8 +245,10 @@ function updateStoneMeshAppearance(entry) {
 function decayHeat() {
   for (let i = posts.value.length - 1; i >= 0; i--) {
     const p = posts.value[i]
-    p.heat = Math.max(0, p.heat - 0.5)
-    p.weathered = Math.min(1, p.weathered + 0.002)
+    // 主語デカい → ゆっくり沈む（scale 100 → 0.33倍速、scale 0 → 1倍速）
+    const scaleFactor = 1 - (p.scale ?? 30) / 150
+    p.heat = Math.max(0, p.heat - 0.5 * scaleFactor)
+    p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
 
     // 熱量ゼロ → 沈没・消滅
     if (p.heat <= 0 && p.weathered >= 0.8) {
@@ -529,7 +536,7 @@ function createStoneMeshes() {
 function addStoneMesh(p) {
   const group = new THREE.Group()
 
-  const size = 0.3 + p.mass * 0.005
+  const size = 0.3 + (p.scale ?? 30) * 0.025  // scale 0→0.3, scale 100→2.8
   const color = massColor(p.mass)
 
   // 石本体（SphereGeometryを歪ませて自然な石に）
@@ -645,16 +652,17 @@ function updateWater(elapsed) {
 }
 
 // --- 波紋 ---
-function addRipple3D(worldX, worldZ, mass) {
-  const amplitude = 0.1 + mass * 0.005
-  const maxRadius = 3 + mass * 0.08
+function addRipple3D(worldX, worldZ, mass, scale = 30) {
+  const s = scale / 100
+  const amplitude = 0.1 + s * 0.8    // scale 100 → 0.9 amplitude
+  const maxRadius = 3 + s * 15        // scale 100 → 18 radius
   ripples.push({
     x: worldX,
     z: worldZ,
     radius: 0.1,
     maxRadius,
     amplitude,
-    speed: Math.max(1.5, 4 - mass * 0.02),
+    speed: Math.max(1.5, 4 - s * 2),
   })
 }
 
@@ -720,12 +728,12 @@ function updateSplashes(dt) {
 }
 
 // --- 石の投げアニメーション ---
-function throwStone(targetX, targetZ, mass, text) {
+function throwStone(targetX, targetZ, mass, text, scale = 30) {
   const startX = -WATER_SIZE / 2 + 2
   const startY = 8
   const startZ = WATER_SIZE / 2 - 2
 
-  const size = 0.3 + mass * 0.005
+  const size = 0.3 + scale * 0.025
   const color = massColor(mass)
   const geo = new THREE.SphereGeometry(size, 8, 6)
   const pos = geo.attributes.position
@@ -765,7 +773,7 @@ function throwStone(targetX, targetZ, mass, text) {
     trailPositions: [],
     startX, startY, startZ,
     targetX, targetZ,
-    mass, text,
+    mass, text, scale,
     progress: 0,
     peakY: startY + 3,
   }
@@ -782,8 +790,8 @@ function updateFlyingStone(dt) {
     scene.remove(f.trailLine)
 
     addSplash3D(f.targetX, f.targetZ, f.mass)
-    addRipple3D(f.targetX, f.targetZ, f.mass)
-    playSplashSound(f.mass)
+    addRipple3D(f.targetX, f.targetZ, f.mass, f.scale)
+    playSplashSound(f.mass, f.scale)
 
     // 石を配置
     const newPost = {
@@ -792,6 +800,7 @@ function updateFlyingStone(dt) {
       x: f.targetX / (WATER_SIZE / 2) / 0.8,
       z: f.targetZ / (WATER_SIZE / 2) / 0.8,
       mass: f.mass,
+      scale: f.scale,
       heat: 50,
       likes: 0,
       weathered: 0,
@@ -837,8 +846,9 @@ function updateStones(elapsed) {
     const s = stoneMeshes[i]
 
     if (s.sinking) {
-      // 沈没アニメーション
-      s.group.position.y -= 0.02
+      // 沈没アニメーション（主語デカい → ゆっくり沈む）
+      const sinkRate = Math.max(0.005, 0.04 - (s.post.scale ?? 30) * 0.0003)
+      s.group.position.y -= sinkRate
       s.group.children.forEach(child => {
         if (child.material) {
           child.material.opacity = Math.max(0, (child.material.opacity || 1) - 0.005)
@@ -956,6 +966,7 @@ const submitPost = async () => {
   try {
     let mass = postText.value.length * 0.1
     let gravity = mass * 0.1
+    let subjectScale = 30
 
     try {
       const res = await fetch('/api/gravity/calculate-mass', {
@@ -967,6 +978,7 @@ const submitPost = async () => {
         const data = await res.json()
         mass = data.mass
         gravity = data.gravity
+        subjectScale = data.subject_scale ?? 30
       }
     } catch {
       console.warn('Gravity API未接続。フォールバック値を使用')
@@ -974,11 +986,12 @@ const submitPost = async () => {
 
     lastMass.value = mass
     lastGravity.value = gravity
+    lastScale.value = subjectScale
 
     // ランダムな着水位置（水面中央付近）
     const targetX = (Math.random() - 0.5) * WATER_SIZE * 0.6
     const targetZ = (Math.random() - 0.5) * WATER_SIZE * 0.6
-    throwStone(targetX, targetZ, mass, postText.value)
+    throwStone(targetX, targetZ, mass, postText.value, subjectScale)
 
     postText.value = ''
   } catch (error) {
