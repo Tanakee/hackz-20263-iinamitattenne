@@ -7,7 +7,7 @@
 ```
 Frontend (Vue.js + Canvas)
     ↓
-Gravity API (Java / Spring Boot) ← 質量計算
+Gravity API (Node.js/Express) ← 質量計算
 Logic API (PHP) ← 風化・熱量・DB連携
 Database (MySQL)
 ```
