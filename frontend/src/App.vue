@@ -64,57 +64,150 @@ let ctx = null
 let animationId = null
 let time = 0
 
-// --- 石管理 (#5) ---
-const stones = []
+// --- 腕 + 石の投げアニメーション ---
+let throwAnim = null
 
-function addStone(targetX, targetY, mass) {
-  stones.push({
-    x: targetX,
-    y: -20,             // 画面上部から開始
+function startThrow(targetX, targetY, mass) {
+  const h = canvas.value.height
+  throwAnim = {
+    phase: 'swing',   // swing → fly → done
+    progress: 0,
+    targetX,
     targetY,
-    vy: 0,              // 初速 0
-    gravity: 0.6 + mass * 0.005, // 質量で加速度を微調整
     mass,
-    size: Math.min(4 + mass * 0.08, 12),
-    landed: false
-  })
+    stoneSize: Math.min(5 + mass * 0.08, 12),
+    // 腕の付け根
+    baseX: 30,
+    baseY: h - 30,
+  }
 }
 
-function updateStones() {
-  for (let i = stones.length - 1; i >= 0; i--) {
-    const s = stones[i]
-    if (s.landed) {
-      stones.splice(i, 1)
-      continue
+// 腕の手の位置を計算（swingの進行度に応じた角度）
+function getHandPos(anim) {
+  const angle = -Math.PI * 0.65 + anim.progress * Math.PI * 0.85
+  const upperLen = 55
+  const foreLen = 55
+  const elbowX = anim.baseX + Math.cos(angle - 0.3) * upperLen
+  const elbowY = anim.baseY + Math.sin(angle - 0.3) * upperLen
+  const handX = elbowX + Math.cos(angle + 0.2) * foreLen
+  const handY = elbowY + Math.sin(angle + 0.2) * foreLen
+  return { elbowX, elbowY, handX, handY }
+}
+
+function updateThrowAnim() {
+  if (!throwAnim) return
+  const a = throwAnim
+
+  if (a.phase === 'swing') {
+    a.progress += 0.05
+    if (a.progress >= 1) {
+      // 石を放つ → fly フェーズへ
+      const { handX, handY } = getHandPos(a)
+      a.phase = 'fly'
+      a.progress = 0
+      a.stoneStartX = handX
+      a.stoneStartY = handY
+      // 放物線の頂点（手と着水点の中間の上方）
+      a.stonePeakX = (handX + a.targetX) / 2
+      a.stonePeakY = Math.min(handY, a.targetY) - 120 - a.mass * 0.3
+      a.armFade = 1 // 腕のフェードアウト用
     }
-    s.vy += s.gravity
-    s.y += s.vy
-    if (s.y >= s.targetY) {
-      s.y = s.targetY
-      s.landed = true
-      // 着水 → スプラッシュ + 波紋
-      addSplash(s.x, s.y, s.mass)
-      const maxRadius = Math.min(80 + s.mass * 1.5, 250)
-      addRipple(s.x, s.y, maxRadius, s.mass)
+  } else if (a.phase === 'fly') {
+    a.progress += 0.03
+    a.armFade = Math.max(0, a.armFade - 0.06)
+    if (a.progress >= 1) {
+      // 着水
+      addSplash(a.targetX, a.targetY, a.mass)
+      const maxRadius = Math.min(80 + a.mass * 1.5, 250)
+      addRipple(a.targetX, a.targetY, maxRadius, a.mass)
+      throwAnim = null
     }
   }
 }
 
-function drawStones() {
-  for (const s of stones) {
-    ctx.save()
-    // 石本体
+// 二次ベジェ曲線上の点
+function bezier(t, p0, p1, p2) {
+  const u = 1 - t
+  return u * u * p0 + 2 * u * t * p1 + t * t * p2
+}
+
+function drawThrowAnim() {
+  if (!throwAnim) return
+  const a = throwAnim
+
+  ctx.save()
+
+  // --- 腕の描画 ---
+  let armAlpha = 1
+  let armProgress = a.phase === 'swing' ? a.progress : 1
+  if (a.phase === 'fly') armAlpha = a.armFade
+
+  if (armAlpha > 0) {
+    ctx.globalAlpha = armAlpha
+    const swingAngle = -Math.PI * 0.65 + armProgress * Math.PI * 0.85
+    const upperLen = 55
+    const foreLen = 55
+    const elbowX = a.baseX + Math.cos(swingAngle - 0.3) * upperLen
+    const elbowY = a.baseY + Math.sin(swingAngle - 0.3) * upperLen
+    const handX = elbowX + Math.cos(swingAngle + 0.2) * foreLen
+    const handY = elbowY + Math.sin(swingAngle + 0.2) * foreLen
+
+    // 上腕
+    ctx.strokeStyle = '#f0c8a0'
+    ctx.lineWidth = 14
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(a.baseX, a.baseY)
+    ctx.lineTo(elbowX, elbowY)
+    ctx.stroke()
+
+    // 前腕
+    ctx.beginPath()
+    ctx.moveTo(elbowX, elbowY)
+    ctx.lineTo(handX, handY)
+    ctx.stroke()
+
+    // 手
+    ctx.fillStyle = '#f0c8a0'
+    ctx.beginPath()
+    ctx.arc(handX, handY, 10, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.globalAlpha = 1
+  }
+
+  // --- 石の描画 ---
+  let stoneX, stoneY
+  if (a.phase === 'swing') {
+    // 手に持っている
+    const { handX, handY } = getHandPos(a)
+    stoneX = handX
+    stoneY = handY - 14
+  } else if (a.phase === 'fly') {
+    // ベジェ曲線で飛行
+    stoneX = bezier(a.progress, a.stoneStartX, a.stonePeakX, a.targetX)
+    stoneY = bezier(a.progress, a.stoneStartY, a.stonePeakY, a.targetY)
+  }
+
+  if (stoneX !== undefined) {
     ctx.fillStyle = '#c8d6e5'
     ctx.beginPath()
-    ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2)
+    ctx.arc(stoneX, stoneY, a.stoneSize, 0, Math.PI * 2)
     ctx.fill()
-    // 石の影（落下方向にぼかし）
-    ctx.fillStyle = 'rgba(200, 214, 229, 0.3)'
-    ctx.beginPath()
-    ctx.arc(s.x, s.y - s.size * 1.5, s.size * 0.6, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
+
+    // 飛行中の残像
+    if (a.phase === 'fly' && a.progress > 0.05) {
+      const prevT = a.progress - 0.05
+      const prevX = bezier(prevT, a.stoneStartX, a.stonePeakX, a.targetX)
+      const prevY = bezier(prevT, a.stoneStartY, a.stonePeakY, a.targetY)
+      ctx.globalAlpha = 0.3
+      ctx.beginPath()
+      ctx.arc(prevX, prevY, a.stoneSize * 0.6, 0, Math.PI * 2)
+      ctx.fill()
+    }
   }
+
+  ctx.restore()
 }
 
 // --- スプラッシュ (#5) ---
@@ -251,12 +344,12 @@ function animate() {
   time++
   ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
   drawBackground()
-  updateStones()
+  updateThrowAnim()
   updateSplashes()
   updateRipples()
   drawRipples()
   drawSplashes()
-  drawStones()
+  drawThrowAnim()
   animationId = requestAnimationFrame(animate)
 }
 
@@ -320,11 +413,11 @@ const submitPost = async () => {
     lastMass.value = mass
     lastGravity.value = gravity
 
-    // 石を落下させる（着水後に波紋が自動発生）
+    // 腕を振って石を投げる（着水後に波紋が自動発生）
     if (canvas.value) {
-      const x = Math.random() * canvas.value.width * 0.6 + canvas.value.width * 0.2
-      const y = Math.random() * canvas.value.height * 0.6 + canvas.value.height * 0.2
-      addStone(x, y, mass)
+      const x = Math.random() * canvas.value.width * 0.5 + canvas.value.width * 0.3
+      const y = Math.random() * canvas.value.height * 0.4 + canvas.value.height * 0.2
+      startThrow(x, y, mass)
     }
 
     postCount.value++
@@ -382,10 +475,12 @@ const checkApiStatus = async () => {
   flex: 1;
   gap: 20px;
   padding: 20px;
+  overflow: hidden;
 }
 
 .wave-canvas {
   flex: 1;
+  min-height: 200px;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   border: 2px solid rgba(255, 255, 255, 0.2);
@@ -394,9 +489,31 @@ const checkApiStatus = async () => {
 
 .sidebar {
   width: 300px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .main-content {
+    flex-direction: column;
+    padding: 10px;
+    gap: 10px;
+  }
+  .wave-canvas {
+    flex: 1;
+  }
+  .sidebar {
+    width: 100%;
+    flex-shrink: 1;
+  }
+  .header h1 {
+    font-size: 1.5em;
+  }
+  .header {
+    padding: 10px;
+  }
 }
 
 .input-section,
