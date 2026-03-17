@@ -35,7 +35,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 const canvas = ref(null)
 const postText = ref('')
@@ -43,6 +43,100 @@ const postCount = ref(0)
 const apiStatus = ref('確認中...')
 
 let ctx = null
+let animationId = null
+let time = 0
+
+// --- 波紋管理 (#3) ---
+const MAX_RIPPLES = 50
+const ripples = []
+
+function addRipple(x, y, maxRadius = 120) {
+  ripples.push({ x, y, radius: 2, maxRadius, alpha: 1 })
+  if (ripples.length > MAX_RIPPLES) {
+    ripples.shift()
+  }
+}
+
+function updateRipples() {
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i]
+    r.radius += 1.5
+    r.alpha = 1 - r.radius / r.maxRadius
+    if (r.radius >= r.maxRadius) {
+      ripples.splice(i, 1)
+    }
+  }
+}
+
+function drawRipples() {
+  for (const r of ripples) {
+    ctx.save()
+    ctx.globalAlpha = r.alpha * 0.8
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2)
+    ctx.stroke()
+    // 内側にもう一つ薄い波紋
+    if (r.radius > 10) {
+      ctx.globalAlpha = r.alpha * 0.3
+      ctx.beginPath()
+      ctx.arc(r.x, r.y, r.radius * 0.6, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+}
+
+// --- 背景描画 (#1) ---
+function drawBackground() {
+  const w = canvas.value.width
+  const h = canvas.value.height
+
+  // 水面グラデーション
+  const grad = ctx.createLinearGradient(0, 0, 0, h)
+  grad.addColorStop(0, '#1a2a6c')
+  grad.addColorStop(0.5, '#2d4a8a')
+  grad.addColorStop(1, '#1a3a5c')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, w, h)
+
+  // 波打つ水面の横線
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'
+  ctx.lineWidth = 1
+  for (let y = 30; y < h; y += 40) {
+    ctx.beginPath()
+    for (let x = 0; x <= w; x += 5) {
+      const offsetY = Math.sin((x + time * 30) * 0.02) * 4
+        + Math.sin((x + time * 15) * 0.01) * 3
+      if (x === 0) {
+        ctx.moveTo(x, y + offsetY)
+      } else {
+        ctx.lineTo(x, y + offsetY)
+      }
+    }
+    ctx.stroke()
+  }
+}
+
+// --- メインループ ---
+function animate() {
+  if (!ctx) return
+  time++
+  ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
+  drawBackground()
+  updateRipples()
+  drawRipples()
+  animationId = requestAnimationFrame(animate)
+}
+
+// --- Canvas セットアップ (#1) ---
+function resizeCanvas() {
+  if (canvas.value) {
+    canvas.value.width = canvas.value.offsetWidth
+    canvas.value.height = canvas.value.offsetHeight
+  }
+}
 
 onMounted(() => {
   if (canvas.value) {
@@ -54,67 +148,20 @@ onMounted(() => {
   }
 })
 
-const resizeCanvas = () => {
-  if (canvas.value) {
-    canvas.value.width = canvas.value.offsetWidth
-    canvas.value.height = canvas.value.offsetHeight
-  }
-}
+onUnmounted(() => {
+  window.removeEventListener('resize', resizeCanvas)
+  if (animationId) cancelAnimationFrame(animationId)
+})
 
-const animate = () => {
-  if (ctx) {
-    ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
-    // 背景
-    ctx.fillStyle = 'rgba(102, 126, 234, 0.1)'
-    ctx.fillRect(0, 0, canvas.value.width, canvas.value.height)
-
-    // グリッド線（海の表現）
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)'
-    ctx.lineWidth = 1
-    for (let i = 0; i < canvas.value.width; i += 50) {
-      ctx.beginPath()
-      ctx.moveTo(i, 0)
-      ctx.lineTo(i, canvas.value.height)
-      ctx.stroke()
-    }
-    for (let i = 0; i < canvas.value.height; i += 50) {
-      ctx.beginPath()
-      ctx.moveTo(0, i)
-      ctx.lineTo(canvas.value.width, i)
-      ctx.stroke()
-    }
-  }
-  requestAnimationFrame(animate)
-}
-
+// --- イベントハンドラ (#2) ---
 const handleCanvasClick = (event) => {
   const rect = canvas.value.getBoundingClientRect()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
-  drawRipple(x, y)
+  addRipple(x, y)
 }
 
-const drawRipple = (x, y) => {
-  // 波紋アニメーション（仮実装）
-  let radius = 5
-  const maxRadius = 100
-
-  const drawRippleFrame = () => {
-    ctx.strokeStyle = `rgba(255, 255, 255, ${1 - radius / maxRadius})`
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(x, y, radius, 0, Math.PI * 2)
-    ctx.stroke()
-
-    radius += 3
-    if (radius < maxRadius) {
-      requestAnimationFrame(drawRippleFrame)
-    }
-  }
-
-  drawRippleFrame()
-}
-
+// --- 投稿 (#4) ---
 const submitPost = async () => {
   if (!postText.value.trim()) {
     alert('何か入力してください')
@@ -122,30 +169,36 @@ const submitPost = async () => {
   }
 
   try {
-    // 重力API呼び出し（テスト用）
     const gravityResponse = await fetch('/api/gravity/calculate-mass', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: postText.value })
     }).catch(() => null)
 
+    // 投稿時にCanvas中央付近にランダムで波紋を発生
+    if (canvas.value) {
+      const x = Math.random() * canvas.value.width * 0.6 + canvas.value.width * 0.2
+      const y = Math.random() * canvas.value.height * 0.6 + canvas.value.height * 0.2
+      addRipple(x, y, 180)
+    }
+
     postCount.value++
     postText.value = ''
-    console.log('投稿が送信されました')
   } catch (error) {
     console.error('投稿送信エラー:', error)
   }
 }
 
+// --- API接続確認 (#12) ---
 const checkApiStatus = async () => {
   try {
     await Promise.all([
       fetch('/api/gravity/health').catch(() => { throw new Error('gravity') }),
       fetch('/api/logic/health').catch(() => { throw new Error('logic') })
     ])
-    apiStatus.value = '✅ 接続済み'
+    apiStatus.value = '接続済み'
   } catch (error) {
-    apiStatus.value = '❌ 未接続'
+    apiStatus.value = '未接続'
   }
 }
 </script>
