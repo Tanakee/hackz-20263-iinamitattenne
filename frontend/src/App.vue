@@ -17,7 +17,7 @@
           <div class="popup-stats">
             <span>質量 {{ selectedPost.mass }}</span>
             <span>主語 {{ selectedPost.scale ?? '—' }}</span>
-            <span>熱量 {{ selectedPost.heat }}</span>
+            <span>熱量 {{ Math.round(selectedPost.heat * 100) / 100 }}</span>
             <span>いいね {{ selectedPost.likes || 0 }}</span>
           </div>
           <button class="like-btn" @click="likePost(selectedPost)">
@@ -52,7 +52,7 @@
             <div class="list-item-meta">
               <span>質量 {{ p.mass }}</span>
               <span>主語 {{ p.scale ?? '—' }}</span>
-              <span>熱量 {{ p.heat }}</span>
+              <span>熱量 {{ Math.round(p.heat * 100) / 100 }}</span>
             </div>
           </div>
         </div>
@@ -75,7 +75,7 @@
             <button
               @click="submitPost"
               class="submit-btn"
-              :disabled="isSubmitting || !postText.trim() || postText.length > 500"
+              :disabled="isSubmitting || !postText.trim() || postText.length > 500 || isFlying"
             >
               {{ isSubmitting ? '投じ中...' : '一石を投じる' }}
             </button>
@@ -99,6 +99,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import * as CANNON from 'cannon-es'
 
 const threeContainer = ref(null)
 const postText = ref('')
@@ -116,6 +117,9 @@ const showList = ref(false)
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
 let waterMesh, waterGeo
+
+// --- 物理演算 (cannon-es) ---
+let physicsWorld
 let animationId = null
 
 // --- 効果音 (Web Audio API) ---
@@ -198,8 +202,11 @@ const ripples = []
 // スプラッシュパーティクル
 let splashParticles = null
 let splashData = []
+// 水柱データ
+const waterColumns = []
 // 飛行中の石
 let flyingStone = null
+const isFlying = ref(false)
 
 // --- 投稿データ管理 ---
 const posts = ref([])
@@ -268,8 +275,12 @@ function decayHeat() {
 function removeStoneMesh(postId) {
   const idx = stoneMeshes.findIndex(s => s.post.id === postId)
   if (idx !== -1) {
-    // 沈没アニメーション用にマーク
     stoneMeshes[idx].sinking = true
+    // 物理ボディを静的に変更（他の石に影響しないように）
+    if (stoneMeshes[idx].body) {
+      stoneMeshes[idx].body.mass = 0
+      stoneMeshes[idx].body.updateMassProperties()
+    }
   }
 }
 
@@ -318,7 +329,7 @@ function initThree() {
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.05
-  controls.maxPolarAngle = Math.PI / 2.2  // 水面より下に潜らない
+  controls.maxPolarAngle = Math.PI / 2.0  // 水面ギリギリまで（水底が見える角度に）
   controls.minDistance = 10
   controls.maxDistance = 50
   controls.target.set(0, 0, 0)
@@ -353,13 +364,65 @@ function initThree() {
   waterMesh.renderOrder = 1
   scene.add(waterMesh)
 
-  // 水底
+  // 水底（深くして石が積み重なるスペースを確保）
+  const BOTTOM_Y = -8
   const bottomGeo = new THREE.PlaneGeometry(WATER_SIZE * 1.2, WATER_SIZE * 1.2)
   const bottomMat = new THREE.MeshPhongMaterial({ color: 0x0a1a3a, emissive: 0x050d1a })
   const bottomMesh = new THREE.Mesh(bottomGeo, bottomMat)
   bottomMesh.rotation.x = -Math.PI / 2
-  bottomMesh.position.y = -2
+  bottomMesh.position.y = BOTTOM_Y
   scene.add(bottomMesh)
+
+  // --- 物理ワールド初期化 ---
+  physicsWorld = new CANNON.World({
+    gravity: new CANNON.Vec3(0, -4, 0),  // 水中重力
+  })
+  physicsWorld.allowSleep = true
+
+  // 共有マテリアル
+  const stoneMat = new CANNON.Material('stone')
+  const groundMat = new CANNON.Material('ground')
+  physicsWorld.defaultContactMaterial = new CANNON.ContactMaterial(
+    stoneMat, groundMat,
+    { friction: 0.8, restitution: 0.1 }
+  )
+  // 石同士の衝突
+  physicsWorld.addContactMaterial(new CANNON.ContactMaterial(
+    stoneMat, stoneMat,
+    { friction: 0.6, restitution: 0.05 }  // 反発をほぼゼロに
+  ))
+  // 物理マテリアルをグローバルに保持
+  physicsWorld._stoneMat = stoneMat
+
+  // 水底の地面（物理）
+  const groundBody = new CANNON.Body({
+    type: CANNON.Body.STATIC,
+    shape: new CANNON.Plane(),
+    material: groundMat,
+  })
+  groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
+  groundBody.position.set(0, BOTTOM_Y, 0)
+  physicsWorld.addBody(groundBody)
+
+  // 水面の境界壁
+  // cannon-es Plane の法線はデフォルト+Z方向。Y軸回転で内向きにする
+  const wallSize = WATER_SIZE / 2
+  const wallConfigs = [
+    { pos: [wallSize, -4, 0], euler: [0, -Math.PI / 2, 0] },   // 右壁（法線-X: 内向き）
+    { pos: [-wallSize, -4, 0], euler: [0, Math.PI / 2, 0] },   // 左壁（法線+X: 内向き）
+    { pos: [0, -4, wallSize], euler: [0, Math.PI, 0] },         // 手前壁（法線-Z: 内向き）
+    { pos: [0, -4, -wallSize], euler: [0, 0, 0] },              // 奥壁（法線+Z: 内向き）
+  ]
+  for (const w of wallConfigs) {
+    const wallBody = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      shape: new CANNON.Plane(),
+      material: groundMat,
+    })
+    wallBody.position.set(...w.pos)
+    wallBody.quaternion.setFromEuler(...w.euler)
+    physicsWorld.addBody(wallBody)
+  }
 
   // 背景の空（暗い夜空）
   scene.background = new THREE.Color(0x0a1628)
@@ -516,7 +579,7 @@ function createRocks() {
   })
   const ground = new THREE.Mesh(groundGeo, groundMat)
   ground.rotation.x = -Math.PI / 2
-  ground.position.y = -1.5
+  ground.position.y = -8
   scene.add(ground)
 }
 
@@ -525,15 +588,17 @@ function createStoneMeshes() {
   // 既存の石を削除
   for (const s of stoneMeshes) {
     scene.remove(s.group)
+    if (s.body) physicsWorld.removeBody(s.body)
   }
   stoneMeshes.length = 0
 
-  for (const p of posts.value) {
-    addStoneMesh(p)
-  }
+  // モック石は水底付近に配置
+  posts.value.forEach((p) => {
+    addStoneMesh(p, -7)
+  })
 }
 
-function addStoneMesh(p) {
+function addStoneMesh(p, startY = 0) {
   const group = new THREE.Group()
 
   const size = 0.3 + (p.scale ?? 30) * 0.025  // scale 0→0.3, scale 100→2.8
@@ -573,16 +638,31 @@ function addStoneMesh(p) {
   // テキストラベル（Sprite）水面上に浮かせて表示
   const label = p.text.length > 16 ? p.text.slice(0, 16) + '…' : p.text
   const sprite = createTextSprite(label, color)
-  sprite.position.y = 2.0
+  sprite.position.y = size + 1.5
   group.add(sprite)
 
-  // 配置（水底に沈める）
+  // 配置位置
   const wx = p.x * (WATER_SIZE / 2) * 0.8
   const wz = p.z * (WATER_SIZE / 2) * 0.8
-  group.position.set(wx, -1.5, wz)
-
+  group.position.set(wx, startY, wz)
   scene.add(group)
-  stoneMeshes.push({ group, post: p, baseY: -1.5 })
+
+  // 物理ボディ（扁平な球 → Sphereで近似）
+  const physicsRadius = size * 0.7  // 見た目より少し小さく（扁平分を考慮）
+  const physicsMass = 1 + (p.scale ?? 30) * 0.05  // scale大 → 重い
+  const body = new CANNON.Body({
+    mass: physicsMass,
+    shape: new CANNON.Sphere(physicsRadius),
+    position: new CANNON.Vec3(wx, startY, wz),
+    linearDamping: 0.9,   // 水中抵抗
+    angularDamping: 0.95,
+    material: physicsWorld._stoneMat,
+    sleepSpeedLimit: 0.3,  // 早めにスリープ
+    sleepTimeLimit: 1,
+  })
+  physicsWorld.addBody(body)
+
+  stoneMeshes.push({ group, post: p, body, size })
 }
 
 function createTextSprite(text, color) {
@@ -727,6 +807,78 @@ function updateSplashes(dt) {
   positions.needsUpdate = true
 }
 
+// --- 水柱 ---
+function addWaterColumn(worldX, worldZ, scale) {
+  const s = scale / 100
+  const maxHeight = 2 + s * 10       // scale 100 → 高さ12
+  const radius = 0.15 + s * 0.5      // scale 100 → 半径0.65
+  const segments = 12
+
+  const geo = new THREE.CylinderGeometry(radius * 0.3, radius, 0.1, segments, 1, true)
+  const mat = new THREE.MeshPhongMaterial({
+    color: 0x4499dd,
+    emissive: 0x1a3a6a,
+    specular: 0xaaddff,
+    shininess: 90,
+    transparent: true,
+    opacity: 0.6,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.set(worldX, 0, worldZ)
+  mesh.renderOrder = 1
+  scene.add(mesh)
+
+  waterColumns.push({
+    mesh,
+    x: worldX,
+    z: worldZ,
+    maxHeight,
+    currentHeight: 0.1,
+    phase: 'rising',   // rising → holding → falling → done
+    holdTime: 0.2 + s * 0.5,  // scale 100 → 0.7秒間維持
+    holdTimer: 0,
+    speed: 8 + s * 12, // scale大 → 速く立ち上がる
+    radius,
+  })
+}
+
+function updateWaterColumns(dt) {
+  for (let i = waterColumns.length - 1; i >= 0; i--) {
+    const col = waterColumns[i]
+
+    if (col.phase === 'rising') {
+      col.currentHeight += col.speed * dt
+      if (col.currentHeight >= col.maxHeight) {
+        col.currentHeight = col.maxHeight
+        col.phase = 'holding'
+      }
+    } else if (col.phase === 'holding') {
+      col.holdTimer += dt
+      if (col.holdTimer >= col.holdTime) {
+        col.phase = 'falling'
+      }
+    } else if (col.phase === 'falling') {
+      col.currentHeight -= col.speed * 0.4 * dt
+      col.mesh.material.opacity = Math.max(0, col.currentHeight / col.maxHeight * 0.6)
+      if (col.currentHeight <= 0) {
+        scene.remove(col.mesh)
+        col.mesh.geometry.dispose()
+        col.mesh.material.dispose()
+        waterColumns.splice(i, 1)
+        continue
+      }
+    }
+
+    // ジオメトリを高さに合わせて再生成
+    col.mesh.geometry.dispose()
+    const topRadius = col.radius * 0.3 * (col.phase === 'rising' ? 1 : col.currentHeight / col.maxHeight)
+    col.mesh.geometry = new THREE.CylinderGeometry(topRadius, col.radius, col.currentHeight, 12, 1, true)
+    col.mesh.position.y = col.currentHeight / 2
+  }
+}
+
 // --- 石の投げアニメーション ---
 function throwStone(targetX, targetZ, mass, text, scale = 30) {
   const startX = -WATER_SIZE / 2 + 2
@@ -767,6 +919,7 @@ function throwStone(targetX, targetZ, mass, text, scale = 30) {
   const trailLine = new THREE.Line(trailGeo, trailMat)
   scene.add(trailLine)
 
+  isFlying.value = true
   flyingStone = {
     mesh,
     trailLine,
@@ -791,6 +944,7 @@ function updateFlyingStone(dt) {
 
     addSplash3D(f.targetX, f.targetZ, f.mass)
     addRipple3D(f.targetX, f.targetZ, f.mass, f.scale)
+    addWaterColumn(f.targetX, f.targetZ, f.scale)
     playSplashSound(f.mass, f.scale)
 
     // 石を配置
@@ -806,9 +960,10 @@ function updateFlyingStone(dt) {
       weathered: 0,
     }
     posts.value.push(newPost)
-    addStoneMesh(newPost)
+    addStoneMesh(newPost, 0)  // 水面から沈み始める
 
     flyingStone = null
+    isFlying.value = false
     return
   }
 
@@ -820,7 +975,7 @@ function updateFlyingStone(dt) {
 
   f.mesh.position.x = u * u * f.startX + 2 * u * t * midX + t * t * f.targetX
   f.mesh.position.z = u * u * f.startZ + 2 * u * t * midZ + t * t * f.targetZ
-  f.mesh.position.y = u * u * f.startY + 2 * u * t * f.peakY + t * t * (-1.5)
+  f.mesh.position.y = u * u * f.startY + 2 * u * t * f.peakY + t * t * 0
   f.mesh.rotation.x += dt * 5
   f.mesh.rotation.z += dt * 3
 
@@ -840,29 +995,44 @@ function updateFlyingStone(dt) {
   f.trailLine.geometry.setDrawRange(0, Math.floor(f.trailPositions.length / 3))
 }
 
-// --- 石のボブ（浮遊）+ 沈没アニメーション ---
-function updateStones(elapsed) {
+// --- 石の物理同期 + 消滅処理 ---
+function updateStones(elapsed, dt) {
+  // 物理ワールドを進める
+  if (physicsWorld) {
+    physicsWorld.step(1 / 60, dt, 3)
+  }
+
   for (let i = stoneMeshes.length - 1; i >= 0; i--) {
     const s = stoneMeshes[i]
 
     if (s.sinking) {
-      // 沈没アニメーション（主語デカい → ゆっくり沈む）
-      const sinkRate = Math.max(0.005, 0.04 - (s.post.scale ?? 30) * 0.0003)
-      s.group.position.y -= sinkRate
+      // 消滅アニメーション（フェードアウト）
       s.group.children.forEach(child => {
         if (child.material) {
-          child.material.opacity = Math.max(0, (child.material.opacity || 1) - 0.005)
+          child.material.opacity = Math.max(0, (child.material.opacity || 1) - 0.008)
         }
       })
-      if (s.group.position.y < -3) {
+      if (s.group.children[0]?.material?.opacity <= 0) {
         scene.remove(s.group)
+        if (s.body) physicsWorld.removeBody(s.body)
         stoneMeshes.splice(i, 1)
       }
       continue
     }
 
-    // 水底でわずかに揺れる
-    s.group.position.y = s.baseY + Math.sin(elapsed * 0.8 + s.post.id * 0.7) * 0.02
+    // 水平方向の速度制限（吹っ飛び防止、沈む方向は制限しない）
+    if (s.body) {
+      const v = s.body.velocity
+      const hSpeed = Math.sqrt(v.x * v.x + v.z * v.z)
+      if (hSpeed > 2) {
+        const scale = 2 / hSpeed
+        v.x *= scale
+        v.z *= scale
+      }
+      // 物理ボディの位置・回転をThree.jsメッシュに同期
+      s.group.position.copy(s.body.position)
+      s.group.quaternion.copy(s.body.quaternion)
+    }
   }
 }
 
@@ -919,7 +1089,8 @@ function animate() {
   updateWater(elapsed)
   updateRipples(dt)
   updateSplashes(dt)
-  updateStones(elapsed)
+  updateWaterColumns(dt)
+  updateStones(elapsed, dt)
   updateFlyingStone(dt)
 
   // 熱量の自然減衰（2秒ごと）
