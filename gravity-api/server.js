@@ -33,7 +33,7 @@ app.post('/api/calculate-mass', async (req, res) => {
       });
     }
 
-    const mass = calculateMass(text);
+    const result = calculateMass(text);
 
     // NLP APIで主語のデカさを取得
     let subjectScale = 30;
@@ -56,11 +56,17 @@ app.post('/api/calculate-mass', async (req, res) => {
     }
 
     res.json({
-      mass: mass,
+      mass: result.total_mass,
       message: '質量を計算しました',
       text_length: text.length,
-      gravity: mass * 0.1,
+      gravity: result.total_mass * 0.1,
       subject_scale: subjectScale,
+      breakdown: {
+        base_mass: result.base_mass,
+        emotion_bonus: result.emotion_bonus,
+        length_bonus: result.length_bonus,
+        paragraph_bonus: result.paragraph_bonus
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -84,7 +90,13 @@ function calculateMass(text) {
   // 合計質量
   const totalMass = baseMass + emotionBonus + lengthBonus + paragraphBonus;
 
-  return Math.round(totalMass * 10) / 10; // 小数第1位で丸める
+  return {
+    base_mass: Math.round(baseMass * 10) / 10,
+    emotion_bonus: emotionBonus,
+    length_bonus: lengthBonus,
+    paragraph_bonus: paragraphBonus,
+    total_mass: Math.round(totalMass * 10) / 10
+  };
 }
 
 // エラーハンドリング
