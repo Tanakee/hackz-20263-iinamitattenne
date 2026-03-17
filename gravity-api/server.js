@@ -14,6 +14,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'Gravity API is running!' });
 });
 
+// 最小文字数の定義
+const MIN_TEXT_LENGTH = 3;
+
 // 質量計算エンドポイント
 app.post('/api/calculate-mass', (req, res) => {
   try {
@@ -21,6 +24,12 @@ app.post('/api/calculate-mass', (req, res) => {
 
     if (!text || text.trim().length === 0) {
       return res.status(400).json({ error: 'Text is required' });
+    }
+
+    if (text.trim().length < MIN_TEXT_LENGTH) {
+      return res.status(400).json({ 
+        error: `Text must be at least ${MIN_TEXT_LENGTH} characters long` 
+      });
     }
 
     const mass = calculateMass(text);
@@ -38,16 +47,22 @@ app.post('/api/calculate-mass', (req, res) => {
 
 // 質量計算ロジック
 function calculateMass(text) {
-  // バリデーション：空文字または1文字以下は質量0を返す
-  if (!text || text.length <= 1) {
-    return 0;
-  }
+  // 基本的な質量 = 文字数 × 係数
+  const baseMass = text.length * 0.1;
 
-  // 基本的な質量 = 文字数 × 係数（係数: 5.0）
-  const baseMass = text.length * 5.0;
+  // 感情ボーナス（感動符号がある場合）
+  const emotionBonus = (text.match(/[！!？?]/g) || []).length * 20;
 
-  // 小数第1位で丸める
-  return Math.round(baseMass * 10) / 10;
+  // 長さボーナス（100文字以上）
+  const lengthBonus = text.length > 100 ? 30 : 0;
+
+  // 改行ボーナス（複数段落）
+  const paragraphBonus = (text.match(/\n/g) || []).length * 10;
+
+  // 合計質量
+  const totalMass = baseMass + emotionBonus + lengthBonus + paragraphBonus;
+
+  return Math.round(totalMass * 10) / 10; // 小数第1位で丸める
 }
 
 // エラーハンドリング
