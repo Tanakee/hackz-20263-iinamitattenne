@@ -25,6 +25,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    environment:
+      - NLP_API_URL=http://nlp-api:8001
     networks:
       - hackz-network
 
@@ -46,6 +48,17 @@ services:
       - GRAVITY_API_URL=http://gravity-api:8080
     depends_on:
       - db
+    networks:
+      - hackz-network
+
+  # NLP API (GiNZA - 主語スケール判定)
+  nlp-api:
+    container_name: hackz-nlp-api
+    build:
+      context: ./nlp-api
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
     networks:
       - hackz-network
 
