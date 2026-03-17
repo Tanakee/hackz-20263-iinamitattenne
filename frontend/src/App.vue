@@ -18,10 +18,25 @@
             v-model="postText"
             placeholder="あなたの意見を投じてください..."
             rows="5"
+            :disabled="isSubmitting"
+            @keydown.ctrl.enter="submitPost"
+            @keydown.meta.enter="submitPost"
           ></textarea>
-          <button @click="submitPost" class="submit-btn">
-            石を投じる
-          </button>
+          <div class="input-footer">
+            <span class="char-count" :class="{ warn: postText.length > 500 }">
+              {{ postText.length }} / 500
+            </span>
+            <button
+              @click="submitPost"
+              class="submit-btn"
+              :disabled="isSubmitting || !postText.trim() || postText.length > 500"
+            >
+              {{ isSubmitting ? '投じ中...' : '石を投じる' }}
+            </button>
+          </div>
+          <p v-if="lastMass !== null" class="mass-result">
+            質量: {{ lastMass }} / 重力: {{ lastGravity }}
+          </p>
         </div>
 
         <div class="info-section">
@@ -41,6 +56,9 @@ const canvas = ref(null)
 const postText = ref('')
 const postCount = ref(0)
 const apiStatus = ref('確認中...')
+const isSubmitting = ref(false)
+const lastMass = ref(null)
+const lastGravity = ref(null)
 
 let ctx = null
 let animationId = null
@@ -161,31 +179,50 @@ const handleCanvasClick = (event) => {
   addRipple(x, y)
 }
 
-// --- 投稿 (#4) ---
+// --- 投稿 (#4) + Gravity API通信 (#10) ---
 const submitPost = async () => {
-  if (!postText.value.trim()) {
-    alert('何か入力してください')
-    return
-  }
+  if (!postText.value.trim() || postText.value.length > 500) return
+
+  isSubmitting.value = true
 
   try {
-    const gravityResponse = await fetch('/api/gravity/calculate-mass', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: postText.value })
-    }).catch(() => null)
+    // Gravity APIで質量を計算
+    let mass = postText.value.length * 0.1 // フォールバック値
+    let gravity = mass * 0.1
 
-    // 投稿時にCanvas中央付近にランダムで波紋を発生
+    try {
+      const res = await fetch('/api/gravity/calculate-mass', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: postText.value })
+      })
+      if (res.ok) {
+        const data = await res.json()
+        mass = data.mass
+        gravity = data.gravity
+      }
+    } catch {
+      console.warn('Gravity API未接続。フォールバック値を使用')
+    }
+
+    lastMass.value = mass
+    lastGravity.value = gravity
+
+    // 質量に応じた波紋サイズ (mass: 0~100+ → maxRadius: 80~250)
+    const maxRadius = Math.min(80 + mass * 1.5, 250)
+
     if (canvas.value) {
       const x = Math.random() * canvas.value.width * 0.6 + canvas.value.width * 0.2
       const y = Math.random() * canvas.value.height * 0.6 + canvas.value.height * 0.2
-      addRipple(x, y, 180)
+      addRipple(x, y, maxRadius)
     }
 
     postCount.value++
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
+  } finally {
+    isSubmitting.value = false
   }
 }
 
@@ -271,10 +308,27 @@ textarea {
   background: rgba(255, 255, 255, 0.9);
 }
 
-.submit-btn {
-  width: 100%;
-  padding: 10px;
+.input-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-top: 10px;
+}
+
+.char-count {
+  font-size: 0.8em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.char-count.warn {
+  color: #ff6b6b;
+  opacity: 1;
+}
+
+.submit-btn {
+  flex: 1;
+  padding: 10px;
   border: none;
   background: #00d4ff;
   color: #333;
@@ -284,9 +338,23 @@ textarea {
   transition: all 0.3s;
 }
 
-.submit-btn:hover {
+.submit-btn:hover:not(:disabled) {
   background: #00f7ff;
   transform: scale(1.05);
+}
+
+.submit-btn:disabled {
+  background: #666;
+  color: #999;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.mass-result {
+  margin-top: 8px;
+  font-size: 0.85em;
+  opacity: 0.8;
+  text-align: center;
 }
 
 .info-section h3 {
