@@ -20,3 +20,13 @@ CREATE TABLE IF NOT EXISTS posts (
 
 -- サンプルデータを挿入（postsテーブルに合わせて修正）
 INSERT INTO posts (text) VALUES ('環境構築テスト');
+
+-- 新しいinteractionsテーブルを作成
+CREATE TABLE IF NOT EXISTS interactions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    post_id INT,
+    type ENUM('wave', 'wind'),
+    value FLOAT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id) REFERENCES posts(id)
+);
