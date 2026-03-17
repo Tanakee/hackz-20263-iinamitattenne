@@ -31,14 +31,7 @@ Database (MySQL)
    docker-compose up --build
    ```
 
-3. **初回起動時の待機**
-   Javaコンテナがビルドされるため、3～5分程度かかります。
-   以下のメッセージが表示されたら完了：
-   ```
-   hackz-gravity-api | 2024-XX-XX XX:XX:XX.XXX  INFO XXXX --- [main] com.hackz.GravityApiApplication
-   ```
-
-4. **ブラウザでアクセス**
+3. **ブラウザでアクセス**
    - フロントエンド: http://localhost:5173
    - 重力API: http://localhost:8080/api/health
    - 風化API: http://localhost:8000/health
@@ -55,11 +48,9 @@ Database (MySQL)
 │   │   └── main.js
 │   ├── package.json
 │   └── vite.config.js
-├── gravity-api/              # Java / Spring Boot API
-│   ├── src/main/java/com/hackz/
-│   │   └── GravityApiApplication.java
-│   ├── build.gradle
-│   └── settings.gradle
+├── gravity-api/              # Node.js/Express 重力計算API
+│   ├── server.js            # エンドポイント実装
+│   └── package.json
 ├── logic-api/                # PHP API
 │   └── index.php            # ハンドラー実装
 ├── db/                       # MySQL 初期化スクリプト
@@ -108,7 +99,6 @@ lsof -i :3306    # DB
 ```
 
 ### 2. "Gravity API" が起動しない
-Spring Boot の Gradle ビルドが重いため、初回は時間がかかります。
 ログを確認：
 ```bash
 docker-compose logs gravity-api
