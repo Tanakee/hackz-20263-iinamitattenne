@@ -3,11 +3,20 @@
 
 USE hackz_db;
 
--- テスト用テーブル（Day 1で削除・置き換え予定）
-CREATE TABLE IF NOT EXISTS test_table (
+-- 既存のテストテーブルを削除
+DROP TABLE IF EXISTS test_table;
+
+-- 新しいpostsテーブルを作成
+CREATE TABLE IF NOT EXISTS posts (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
+    text TEXT NOT NULL,
+    x FLOAT,
+    y FLOAT,
+    mass FLOAT,
+    heat FLOAT DEFAULT 0,
+    weathered BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO test_table (name) VALUES ('環境構築テスト');
+-- サンプルデータを挿入（postsテーブルに合わせて修正）
+INSERT INTO posts (text) VALUES ('環境構築テスト');
