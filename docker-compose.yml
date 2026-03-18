@@ -1,4 +1,21 @@
 services:
+  # データベース (MySQL)
+  db:
+    container_name: hackz-db
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=hackz_db
+      - MYSQL_USER=hackz_user
+      - MYSQL_PASSWORD=hackz_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - db_data:/var/lib/mysql
+    networks:
+      - hackz-network
+
   # フロントエンド (Vue.js + Vite)
   frontend:
     container_name: hackz-frontend
@@ -28,6 +45,8 @@ services:
     environment:
       - NLP_API_URL=http://nlp-api:8001
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - db
     networks:
       - hackz-network
 
@@ -52,7 +71,7 @@ services:
     networks:
       - hackz-network
 
-  # NLP API (GiNZA - 主語スケール判定)
+  # NLP API (Python)
   nlp-api:
     container_name: hackz-nlp-api
     build:
@@ -63,26 +82,9 @@ services:
     networks:
       - hackz-network
 
-  # データベース (MySQL)
-  db:
-    container_name: hackz-db
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: hackz_db
-      MYSQL_USER: hackz_user
-      MYSQL_PASSWORD: hackz_password
-    ports:
-      - "3306:3306"
-    volumes:
-      - db-volume:/var/lib/mysql
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - hackz-network
+volumes:
+  db_data:
 
 networks:
   hackz-network:
     driver: bridge
-
-volumes:
-  db-volume:

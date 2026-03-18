@@ -30,3 +30,11 @@ CREATE TABLE IF NOT EXISTS interactions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
+
+-- windsテーブルを作成（AI要約結果を保存）
+CREATE TABLE IF NOT EXISTS winds (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    post_ids TEXT NOT NULL, -- 関連する投稿IDのJSON文字列
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
