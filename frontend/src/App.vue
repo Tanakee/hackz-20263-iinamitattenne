@@ -483,34 +483,61 @@ let vrPhoneLaser = null    // レーザーポインター
 const vrPhoneRaycaster = new THREE.Raycaster()
 
 // ひらがなキーボード配列
-const VR_KB_ROWS = [
-  ['あ','い','う','え','お','か','き','く','け','こ'],
-  ['さ','し','す','せ','そ','た','ち','つ','て','と'],
-  ['な','に','ぬ','ね','の','は','ひ','ふ','へ','ほ'],
-  ['ま','み','む','め','も','や','ゆ','よ','ら','り'],
-  ['る','れ','ろ','わ','を','ん','ー','！','？','。'],
-]
-// ボタン領域を動的に生成
-const VR_PHONE_BUTTONS = []
+const VR_KB_LAYOUTS = {
+  hiragana: [
+    ['あ','い','う','え','お','か','き','く','け','こ'],
+    ['さ','し','す','せ','そ','た','ち','つ','て','と'],
+    ['な','に','ぬ','ね','の','は','ひ','ふ','へ','ほ'],
+    ['ま','み','む','め','も','や','ゆ','よ','ら','り'],
+    ['る','れ','ろ','わ','を','ん','ー','！','？','。'],
+  ],
+  katakana: [
+    ['ア','イ','ウ','エ','オ','カ','キ','ク','ケ','コ'],
+    ['サ','シ','ス','セ','ソ','タ','チ','ツ','テ','ト'],
+    ['ナ','ニ','ヌ','ネ','ノ','ハ','ヒ','フ','ヘ','ホ'],
+    ['マ','ミ','ム','メ','モ','ヤ','ユ','ヨ','ラ','リ'],
+    ['ル','レ','ロ','ワ','ヲ','ン','ー','！','？','。'],
+  ],
+  number: [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['@','#','$','%','&','*','+','-','=','/'],
+    ['（','）','「','」','『','』','【','】','〜','…'],
+    ['A','B','C','D','E','F','G','H','I','J'],
+    ['K','L','M','N','O','P','Q','R','S','T'],
+  ],
+}
+const VR_KB_MODE_ORDER = ['hiragana', 'katakana', 'number']
+const VR_KB_MODE_LABELS = { hiragana: 'あ', katakana: 'ア', number: '123' }
+let vrKbMode = 'hiragana'
+
+// ボタン領域を動的に生成（モード切替時に再構築）
+let VR_PHONE_BUTTONS = []
 const KB_TOP = 100  // キーボード開始Y
 const KB_KEY_W = 30
 const KB_KEY_H = 42
 const KB_PAD = 2
-for (let r = 0; r < VR_KB_ROWS.length; r++) {
-  for (let c = 0; c < VR_KB_ROWS[r].length; c++) {
-    VR_PHONE_BUTTONS.push({
-      x: 4 + c * (KB_KEY_W + KB_PAD), y: KB_TOP + r * (KB_KEY_H + KB_PAD),
-      w: KB_KEY_W, h: KB_KEY_H,
-      type: 'key', char: VR_KB_ROWS[r][c],
-    })
+
+function buildVRKeyboardButtons() {
+  VR_PHONE_BUTTONS = []
+  const rows = VR_KB_LAYOUTS[vrKbMode]
+  for (let r = 0; r < rows.length; r++) {
+    for (let c = 0; c < rows[r].length; c++) {
+      VR_PHONE_BUTTONS.push({
+        x: 4 + c * (KB_KEY_W + KB_PAD), y: KB_TOP + r * (KB_KEY_H + KB_PAD),
+        w: KB_KEY_W, h: KB_KEY_H,
+        type: 'key', char: rows[r][c],
+      })
+    }
   }
+  // 機能キー行
+  const FUNC_Y = KB_TOP + 5 * (KB_KEY_H + KB_PAD) + 6
+  VR_PHONE_BUTTONS.push({ x: 4, y: FUNC_Y, w: 58, h: 38, type: 'backspace' })
+  VR_PHONE_BUTTONS.push({ x: 66, y: FUNC_Y, w: 50, h: 38, type: 'space' })
+  VR_PHONE_BUTTONS.push({ x: 120, y: FUNC_Y, w: 50, h: 38, type: 'clear' })
+  VR_PHONE_BUTTONS.push({ x: 174, y: FUNC_Y, w: 50, h: 38, type: 'mode' })
+  VR_PHONE_BUTTONS.push({ x: 228, y: FUNC_Y, w: 88, h: 38, type: 'exit' })
 }
-// 機能キー行
-const FUNC_Y = KB_TOP + 5 * (KB_KEY_H + KB_PAD) + 6
-VR_PHONE_BUTTONS.push({ x: 4, y: FUNC_Y, w: 62, h: 38, type: 'backspace' })
-VR_PHONE_BUTTONS.push({ x: 70, y: FUNC_Y, w: 62, h: 38, type: 'space' })
-VR_PHONE_BUTTONS.push({ x: 136, y: FUNC_Y, w: 62, h: 38, type: 'clear' })
-VR_PHONE_BUTTONS.push({ x: 202, y: FUNC_Y, w: 112, h: 38, type: 'exit' })
+buildVRKeyboardButtons()
 
 function buildVRPhone() {
   vrPhoneCanvas = document.createElement('canvas')
@@ -639,6 +666,15 @@ function updateVRPhoneScreen() {
       ctx.font = '13px sans-serif'
       ctx.textAlign = 'center'
       ctx.fillText('全消', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'mode') {
+      ctx.fillStyle = isHover ? 'rgba(100,200,100,0.5)' : 'rgba(100,200,100,0.2)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#aaffaa'
+      ctx.font = 'bold 13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(VR_KB_MODE_LABELS[vrKbMode], btn.x + btn.w / 2, btn.y + 24)
     } else if (btn.type === 'exit') {
       ctx.fillStyle = isHover ? 'rgba(255,80,80,0.5)' : 'rgba(255,80,80,0.25)'
       ctx.beginPath()
@@ -702,7 +738,10 @@ function vrPhonePress(btnIdx) {
     xrSession?.end()
   } else if (btn.type === 'clear') {
     postText.value = ''
-  }
+  } else if (btn.type === 'mode') {
+    const idx = VR_KB_MODE_ORDER.indexOf(vrKbMode)
+    vrKbMode = VR_KB_MODE_ORDER[(idx + 1) % VR_KB_MODE_ORDER.length]
+    buildVRKeyboardButtons()
   updateVRPhoneScreen()
 }
 
@@ -1637,6 +1676,9 @@ let xrGrabFrames = 0
 let xrVelocity = new THREE.Vector3()
 let xrPeakSpeed = 0
 let xrPeakVelocity = new THREE.Vector3()
+// 直近N フレームの速度を保持して平均方向を計算（ブレ軽減）
+const XR_VEL_HISTORY_SIZE = 6
+let xrVelHistory = []
 let xrStoneMesh = null  // 手に持っている石のメッシュ
 let xrHandMesh = null   // 手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
@@ -1827,6 +1869,7 @@ function xrAnimateLoop(timestamp, frame) {
         xrGrabFrames = 0
         xrPeakSpeed = 0
         xrPeakVelocity.set(0, 0, 0)
+        xrVelHistory = []
 
         if (!xrStoneMesh) {
           const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
@@ -1869,6 +1912,9 @@ function xrAnimateLoop(timestamp, frame) {
           }
         }
         const speed = xrVelocity.length()
+        // 速度履歴を保持（方向の平均化用）
+        xrVelHistory.push(xrVelocity.clone())
+        if (xrVelHistory.length > XR_VEL_HISTORY_SIZE) xrVelHistory.shift()
         if (speed > xrPeakSpeed) {
           xrPeakSpeed = speed
           xrPeakVelocity.copy(xrVelocity)
@@ -1885,17 +1931,29 @@ function xrAnimateLoop(timestamp, frame) {
         }
 
         if (xrGrabFrames >= 2 && xrPeakSpeed > 0.3) {
-          // 速度のXZ成分（水平方向のみ）で投げ方向を決定
-          const flatVel = new THREE.Vector2(xrPeakVelocity.x, xrPeakVelocity.z)
+          // 直近フレームの速度を平均して方向を安定化
+          const avgVel = new THREE.Vector3()
+          const hist = xrVelHistory
+          if (hist.length > 0) {
+            // 速度が大きいフレームほど重み付け（投げ動作部分を重視）
+            let totalWeight = 0
+            for (const v of hist) {
+              const w = v.length()
+              avgVel.addScaledVector(v, w)
+              totalWeight += w
+            }
+            if (totalWeight > 0) avgVel.divideScalar(totalWeight)
+          }
+          // X成分を増幅して左右の投げを検出しやすくする
+          const LR_AMPLIFY = 2.0
+          const flatVel = new THREE.Vector2(avgVel.x * LR_AMPLIFY, avgVel.z)
           const flatSpeed = flatVel.length()
 
           let dirX, dirZ
           if (flatSpeed > 0.05) {
-            // 水平方向の速度がある → その方向に飛ばす
             dirX = flatVel.x / flatSpeed
             dirZ = flatVel.y / flatSpeed
           } else {
-            // ほぼ真下に振った → 正面（-Z方向）に飛ばす
             dirX = 0
             dirZ = -1
           }
@@ -1955,6 +2013,8 @@ const checkApiStatus = async () => {
   background: #0a1628;
   overflow: hidden;
 }
+
+
 
 .header-overlay {
   position: absolute;
