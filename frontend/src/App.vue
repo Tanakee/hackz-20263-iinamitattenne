@@ -1679,9 +1679,9 @@ let xrGrabFrames = 0
 let xrVelocity = new THREE.Vector3()
 let xrPeakSpeed = 0
 let xrPeakVelocity = new THREE.Vector3()
-// 直近N フレームの速度を保持して平均方向を計算（ブレ軽減）
-const XR_VEL_HISTORY_SIZE = 6
-let xrVelHistory = []
+// 直近N フレームの手の位置を記録（移動距離ベースの投げ判定用）
+const XR_POS_HISTORY_SIZE = 8
+let xrPosHistory = []  // { pos: Vector3, time: number }
 let xrStoneMesh = null  // 手に持っている石のメッシュ
 let xrHandMesh = null   // 手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
@@ -1873,7 +1873,7 @@ function xrAnimateLoop(timestamp, frame) {
         xrGrabFrames = 0
         xrPeakSpeed = 0
         xrPeakVelocity.set(0, 0, 0)
-        xrVelHistory = []
+        xrPosHistory = []
 
         if (!xrStoneMesh) {
           const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
@@ -1915,14 +1915,9 @@ function xrAnimateLoop(timestamp, frame) {
             glow.scale.set(pulse, pulse, pulse)
           }
         }
-        const speed = xrVelocity.length()
-        // 速度履歴を保持（方向の平均化用）
-        xrVelHistory.push(xrVelocity.clone())
-        if (xrVelHistory.length > XR_VEL_HISTORY_SIZE) xrVelHistory.shift()
-        if (speed > xrPeakSpeed) {
-          xrPeakSpeed = speed
-          xrPeakVelocity.copy(xrVelocity)
-        }
+        // 位置履歴を記録（移動距離ベースの投げ判定用）
+        xrPosHistory.push({ pos: worldPos.clone(), time: elapsed })
+        if (xrPosHistory.length > XR_POS_HISTORY_SIZE) xrPosHistory.shift()
       } else if (!gripPressed && xrGrabbing) {
         // 離した → 投石！
         xrGrabbing = false
@@ -1934,42 +1929,47 @@ function xrAnimateLoop(timestamp, frame) {
           xrStoneMesh = null
         }
 
-        if (xrGrabFrames >= 2) {
-          // リリース直前の速度から方向と強さを計算
-          const hist = xrVelHistory
-          const avgVel = new THREE.Vector3()
-          let avgSpeed = 0
-          if (hist.length > 0) {
-            // 直近フレームの単純平均（リリース時点の実速度）
-            for (const v of hist) avgVel.add(v)
-            avgVel.divideScalar(hist.length)
-            avgSpeed = avgVel.length()
+        if (xrGrabFrames >= 2 && xrPosHistory.length >= 2) {
+          // 直近の位置履歴から、手の実移動距離と方向を計算
+          const hist = xrPosHistory
+          const first = hist[0]
+          const last = hist[hist.length - 1]
+          const dt = last.time - first.time
+
+          // 始点→終点のベクトル（投げの方向）
+          const displacement = new THREE.Vector3().subVectors(last.pos, first.pos)
+          // 実際の経路長（各フレーム間距離の合計）
+          let pathLength = 0
+          for (let i = 1; i < hist.length; i++) {
+            pathLength += hist[i].pos.distanceTo(hist[i - 1].pos)
           }
 
-          // 最低速度に満たない場合は投げない（手ブレ防止）
-          if (avgSpeed > 0.3) {
-            // X成分を増幅して左右の投げを検出しやすくする
+          // 手の移動速度 = 経路長 / 時間（ノイズに強い）
+          const throwSpeed = dt > 0 ? pathLength / dt : 0
+
+          // 最低速度閾値（手ブレ: ~0.02m/frame → ~1.4m/s at 72Hz）
+          if (throwSpeed > 0.8) {
+            // 方向は始点→終点ベクトルから（経路長ではなく直線方向）
             const LR_AMPLIFY = 2.0
-            const flatVel = new THREE.Vector2(avgVel.x * LR_AMPLIFY, avgVel.z)
-            const flatSpeed = flatVel.length()
+            const flatDisp = new THREE.Vector2(displacement.x * LR_AMPLIFY, displacement.z)
+            const flatLen = flatDisp.length()
 
             let dirX, dirZ
-            if (flatSpeed > 0.05) {
-              dirX = flatVel.x / flatSpeed
-              dirZ = flatVel.y / flatSpeed
+            if (flatLen > 0.01) {
+              dirX = flatDisp.x / flatLen
+              dirZ = flatDisp.y / flatLen
             } else {
               dirX = 0
               dirZ = -1
             }
 
-            // 指数カーブ: 弱い力→足元、遠くに飛ばすには指数的に力が必要
-            // e^(speed*k) 型のカーブ
+            // 指数カーブ: 遠くに飛ばすには指数的に力が必要
+            // throwSpeed 0.8→足元, 2.0→近い, 4.0→中距離, 6.0+→遠距離
             const MIN_DIST = 0.3
             const MAX_DIST = WATER_SIZE * 0.45
-            const POWER_SCALE = 1.5  // この値が大きいほど強い力が必要
-            const expPower = (Math.exp(avgSpeed * POWER_SCALE) - Math.exp(0)) /
-                             (Math.exp(5.0 * POWER_SCALE) - Math.exp(0))
-            const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * Math.min(expPower, 1)
+            const normalized = Math.min((throwSpeed - 0.8) / 6.0, 1)
+            const expDist = Math.pow(normalized, 3)  // 三乗カーブ
+            const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * expDist
 
             const halfW = WATER_SIZE * 0.45
             const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
