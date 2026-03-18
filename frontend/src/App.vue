@@ -1217,12 +1217,13 @@ function addStoneMesh(p, startY = 0) {
   group.position.set(wx, startY, wz)
   scene.add(group)
 
-  // 物理ボディ（扁平な球 → Sphereで近似）
-  const physicsRadius = size * 0.95  // 見た目とほぼ同サイズでシビアに判定
+  // 物理ボディ（扁平な石 → Cylinderで近似）
+  const physicsRadius = size * 0.85
+  const physicsHalfHeight = size * 0.45  // 見た目の扁平率に合わせる
   const physicsMass = 1 + (p.scale ?? 30) * 0.05  // scale大 → 重い
   const body = new CANNON.Body({
     mass: physicsMass,
-    shape: new CANNON.Sphere(physicsRadius),
+    shape: new CANNON.Cylinder(physicsRadius, physicsRadius, physicsHalfHeight * 2, 8),
     position: new CANNON.Vec3(wx, startY, wz),
     linearDamping: 0.9,   // 水中抵抗
     angularDamping: 0.95,
