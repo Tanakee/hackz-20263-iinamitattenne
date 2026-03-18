@@ -60,6 +60,9 @@
               <span>質量 {{ p.mass }}</span>
               <span>主語 {{ p.scale ?? '—' }}</span>
               <span>熱量 {{ Math.round(p.heat * 100) / 100 }}</span>
+              <span class="list-weathering" :class="{ danger: p.weathered >= 0.7 }">
+                風化中 {{ Math.round(p.weathered * 100) }}%
+              </span>
             </div>
           </div>
         </div>
@@ -342,14 +345,59 @@ async function likePost(post) {
   }
 }
 
-// 石メッシュの見た目を熱量に応じて更新
-function updateStoneMeshAppearance(entry) {
+// 石メッシュの見た目を熱量・風化度に応じて更新
+function updateStoneMeshAppearance(entry, elapsed = 0) {
   const p = entry.post
-  const color = massColor(p.mass)
   const stoneChild = entry.group.children[0]
-  if (stoneChild && stoneChild.material) {
-    stoneChild.material.emissive = color.clone().multiplyScalar(p.heat > 30 ? 0.3 : 0.05)
-    stoneChild.material.opacity = Math.max(0.4, 1 - p.weathered)
+  if (!stoneChild || !stoneChild.material) return
+
+  const w = p.weathered  // 0.0〜1.0
+
+  // グレースケール化: 風化が進むほど彩度を失う
+  const color = massColor(p.mass)
+  const gray = (color.r * 0.299 + color.g * 0.587 + color.b * 0.114)
+  const r = color.r * (1 - w) + gray * w
+  const g = color.g * (1 - w) + gray * w
+  const b = color.b * (1 - w) + gray * w
+
+  // 石本体の色をグレーに
+  const stoneGray = 0.533 * (1 - w) + 0.3 * w  // 元の0x888888=0.533
+  stoneChild.material.color.setRGB(stoneGray, stoneGray, stoneGray)
+
+  // 熱量20以上: 青い境界線エミッシブ / 未満: 暗く
+  if (p.heat >= 20) {
+    stoneChild.material.emissive.setRGB(0, 0.1 * (p.heat / 100), 0.3 * (p.heat / 100))
+  } else {
+    stoneChild.material.emissive.setRGB(r * 0.05, g * 0.05, b * 0.05)
+  }
+
+  // 風化度70%以上: 脈動アニメーション
+  let opacity = Math.max(0.15, 1 - w * 0.85)
+  if (w >= 0.7 && elapsed > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4)
+    opacity *= (0.6 + 0.4 * pulse)
+  }
+  stoneChild.material.opacity = opacity
+
+  // 境界線リング（熱量20以上のみ青く光る）
+  let ring = entry.group.getObjectByName('heatRing')
+  if (p.heat >= 20) {
+    if (!ring) {
+      const ringGeo = new THREE.TorusGeometry(entry.size * 1.3, 0.04, 8, 32)
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x44aaff,
+        transparent: true,
+        depthWrite: false,
+      })
+      ring = new THREE.Mesh(ringGeo, ringMat)
+      ring.name = 'heatRing'
+      ring.rotation.x = Math.PI / 2
+      entry.group.add(ring)
+    }
+    ring.material.opacity = 0.3 + (p.heat / 100) * 0.5
+    ring.visible = true
+  } else if (ring) {
+    ring.visible = false
   }
 }
 
@@ -364,8 +412,9 @@ async function decayHeat() {
     // 熱量が一定ライン（20）を下回ると風化が進む
     const WEATHERING_THRESHOLD = 20;
     if (p.heat < WEATHERING_THRESHOLD) {
-      // 熱量が低いほど風化が早く進む
-      const speed = 0.005 + (WEATHERING_THRESHOLD - p.heat) * 0.0005;
+      // 熱量0に近いほど加速（最大、0の時は間隔の約1/4で消滅）
+      const heatRatio = 1 - p.heat / WEATHERING_THRESHOLD  // 0〜1
+      const speed = 0.005 + heatRatio * 0.02;
       p.weathered = Math.min(1, p.weathered + speed * scaleFactor);
     } else {
       // 熱量が閾値以上の場合は徐々に自己修復（風化が戻る）
@@ -381,7 +430,7 @@ async function decayHeat() {
       }
     } else {
       const entry = stoneMeshes.find(s => s.post.id === p.id)
-      if (entry) updateStoneMeshAppearance(entry)
+      if (entry) updateStoneMeshAppearance(entry, 0)
     }
   }
 }
@@ -1491,6 +1540,9 @@ function updateStones(elapsed, dt) {
       s.group.position.copy(s.body.position)
       s.group.quaternion.copy(s.body.quaternion)
     }
+
+    // 風化視覚更新（脈動に elapsed を渡す）
+    updateStoneMeshAppearance(s, elapsed)
   }
 }
 
@@ -2392,6 +2444,21 @@ textarea::placeholder {
   gap: 12px;
   font-size: 0.75em;
   opacity: 0.4;
+  flex-wrap: wrap;
+}
+
+.list-weathering {
+  color: #aaaaaa;
+}
+
+.list-weathering.danger {
+  color: #ff6b6b;
+  animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 .slide-enter-active, .slide-leave-active {
