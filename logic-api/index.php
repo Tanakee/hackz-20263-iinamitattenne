@@ -70,6 +70,12 @@ switch ($request_uri) {
         }
         break;
 
+    case '/hot-topics':
+        if ($request_method === 'GET') {
+            handleGetHotTopics();
+        }
+        break;
+
     default:
         http_response_code(404);
         echo json_encode(['error' => 'Endpoint not found']);
@@ -181,36 +187,169 @@ function handleGetPosts() {
 }
 
 function handleWeatheringCheck() {
-    $input = json_decode(file_get_contents('php://input'), true);
+    try {
+        $input = json_decode(file_get_contents('php://input'), true);
 
-    if (!isset($input['post_id'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'post_id is required']);
-        return;
+        if (!isset($input['post_id'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'post_id is required']);
+            return;
+        }
+
+        $post_id = $input['post_id'];
+        $pdo = getDBConnection();
+
+        // 対象の投稿を取得
+        $stmt = $pdo->prepare("SELECT id, created_at, weathered FROM posts WHERE id = ?");
+        $stmt->execute([$post_id]);
+        $post = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$post) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Post not found']);
+            return;
+        }
+
+        $created_timestamp = strtotime($post['created_at']);
+        $current_timestamp = time();
+        $elapsed_time_seconds = max(0, $current_timestamp - $created_timestamp); // 負の数を防止
+
+        // 風化度合い (0.0 〜 1.0)
+        $weathering_degree = min($elapsed_time_seconds / 86400, 1.0);
+        $is_weathered = ($elapsed_time_seconds >= 86400);
+
+        // 未風化から風化状態に変わる場合はDBを更新
+        if ($is_weathered && !$post['weathered']) {
+            $updateStmt = $pdo->prepare("UPDATE posts SET weathered = TRUE WHERE id = ?");
+            $updateStmt->execute([$post_id]);
+        }
+
+        http_response_code(200);
+        echo json_encode([
+            'weathered' => $is_weathered,
+            'weathering_degree' => $weathering_degree,
+            'elapsed_time_seconds' => $elapsed_time_seconds
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to check weathering: ' . $e->getMessage()]);
     }
-
-    // 簡易的な風化判定（24時間以上経過したら風化）
-    $created_timestamp = strtotime($input['created_at'] ?? 'now');
-    $current_timestamp = time();
-    $is_weathered = ($current_timestamp - $created_timestamp) > 86400;
-
-    http_response_code(200);
-    echo json_encode(['weathered' => $is_weathered]);
 }
 
 function handleHeatCalculation() {
-    $input = json_decode(file_get_contents('php://input'), true);
+    try {
+        $input = json_decode(file_get_contents('php://input'), true);
 
-    if (!isset($input['post_id'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'post_id is required']);
-        return;
+        if (!isset($input['post_id'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'post_id is required']);
+            return;
+        }
+
+        $post_id = $input['post_id'];
+        $pdo = getDBConnection();
+
+        // 1. 対象の投稿の座標(x,y)を取得
+        $stmt = $pdo->prepare("SELECT id, x, y, mass FROM posts WHERE id = ?");
+        $stmt->execute([$post_id]);
+        $target_post = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$target_post) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Post not found']);
+            return;
+        }
+
+        $x = (float)$target_post['x'];
+        $y = (float)$target_post['y'];
+
+        // 2. 近接する投稿の数と質量の合計を算出 (自身を除く)
+        // ここでは距離 100 以内を近接と定義
+        $proximity_distance = 100;
+        $nearbyStmt = $pdo->prepare("
+            SELECT COUNT(*) as nearby_count, COALESCE(SUM(mass), 0) as nearby_mass_sum 
+            FROM posts 
+            WHERE id != ? 
+            AND SQRT(POW(x - ?, 2) + POW(y - ?, 2)) <= ?
+        ");
+        $nearbyStmt->execute([$post_id, $x, $y, $proximity_distance]);
+        $nearby_data = $nearbyStmt->fetch(PDO::FETCH_ASSOC);
+
+        $nearby_count = (int)$nearby_data['nearby_count'];
+        $nearby_mass_sum = (float)$nearby_data['nearby_mass_sum'];
+
+        // 3. interactions テーブルからの反応数を取得
+        $interactionsStmt = $pdo->prepare("
+            SELECT COUNT(*) as interaction_count, COALESCE(SUM(value), 0) as interaction_value_sum 
+            FROM interactions 
+            WHERE post_id = ?
+        ");
+        $interactionsStmt->execute([$post_id]);
+        $interactions_data = $interactionsStmt->fetch(PDO::FETCH_ASSOC);
+        
+        $interaction_count = (int)$interactions_data['interaction_count'];
+        $interaction_value_sum = (float)$interactions_data['interaction_value_sum'];
+
+        // 4. 熱量の計算ロジック
+        // 基礎熱量を 10 とする
+        // 近接投稿1つにつき +10, 近接投稿の質量の合計 * 0.5
+        // インタラクション1つにつき +20, valueの合計 * 1.0
+        $base_heat = 10;
+        $nearby_score = ($nearby_count * 10) + ($nearby_mass_sum * 0.5);
+        $interaction_score = ($interaction_count * 20) + ($interaction_value_sum * 1.0);
+
+        $heat = $base_heat + $nearby_score + $interaction_score;
+
+        // 5. posts テーブルの heat カラムに更新
+        $updateStmt = $pdo->prepare("UPDATE posts SET heat = ? WHERE id = ?");
+        $updateStmt->execute([$heat, $post_id]);
+
+        http_response_code(200);
+        echo json_encode([
+            'heat' => $heat, 
+            'details' => [
+                'nearby_count' => $nearby_count,
+                'nearby_mass_sum' => $nearby_mass_sum,
+                'interaction_count' => $interaction_count,
+                'interaction_value_sum' => $interaction_value_sum
+            ],
+            'message' => '熱量を計算しました'
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to calculate heat: ' . $e->getMessage()]);
     }
+}
 
-    // テンプレート実装：複数の投稿から熱量を集計
-    $heat = rand(10, 100);
+function handleGetHotTopics() {
+    try {
+        $pdo = getDBConnection();
+        
+        // 閾値の取得（環境変数から、なければデフォルト100）
+        $threshold = (float)(getenv('HOT_TOPIC_THRESHOLD') ?: 100);
 
-    http_response_code(200);
-    echo json_encode(['heat' => $heat, 'message' => '熱量を計算しました']);
+        // 風化しておらず、熱量が閾値以上の投稿を取得（熱量の降順）
+        $stmt = $pdo->prepare("
+            SELECT id, text, x, y, mass, heat, created_at 
+            FROM posts 
+            WHERE weathered = FALSE AND heat > ? 
+            ORDER BY heat DESC
+        ");
+        $stmt->execute([$threshold]);
+        $hot_topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        http_response_code(200);
+        echo json_encode([
+            'threshold' => $threshold,
+            'count' => count($hot_topics),
+            'hot_topics' => $hot_topics
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to retrieve hot topics: ' . $e->getMessage()]);
+    }
 }
 ?>
