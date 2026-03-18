@@ -286,7 +286,9 @@ function loadMockPosts() {
     { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0, scale: 85 },
     { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4, scale: 40 },
   ]
-  async function loadWinds() {
+}
+
+async function loadWinds() {
   try {
     const res = await fetch(`${logicApiUrl}/winds`)
     if (res.ok) {
@@ -295,7 +297,6 @@ function loadMockPosts() {
   } catch (error) {
     console.error('風の取得に失敗しました:', error)
   }
-}
 }
 
 // 一覧のソート（熱量順）
@@ -742,6 +743,7 @@ function vrPhonePress(btnIdx) {
     const idx = VR_KB_MODE_ORDER.indexOf(vrKbMode)
     vrKbMode = VR_KB_MODE_ORDER[(idx + 1) % VR_KB_MODE_ORDER.length]
     buildVRKeyboardButtons()
+  }
   updateVRPhoneScreen()
 }
 
@@ -767,7 +769,7 @@ function initThree() {
   renderer.toneMappingExposure = 1.2
   container.appendChild(renderer.domElement)
 
-  clock = new THREE.Clock()
+  clock = new THREE.Timer()
 
   // OrbitControls（カメラ操作）
   controls = new OrbitControls(camera, renderer.domElement)
@@ -1539,8 +1541,9 @@ function handleClick(event) {
 let decayTimer = 0
 function animate() {
   animationId = requestAnimationFrame(animate)
+  clock.update()
   const dt = Math.min(clock.getDelta(), 0.05)
-  const elapsed = clock.getElapsedTime()
+  const elapsed = clock.getElapsed()
 
   updateWater(elapsed)
   updateRipples(dt)
@@ -1571,8 +1574,8 @@ function onResize() {
 }
 
 // --- ライフサイクル ---
-onMounted(() => {
-  loadPosts()
+onMounted(async () => {
+  await loadPosts()
   initThree()
   animate()
   checkApiStatus()
@@ -1676,9 +1679,9 @@ let xrGrabFrames = 0
 let xrVelocity = new THREE.Vector3()
 let xrPeakSpeed = 0
 let xrPeakVelocity = new THREE.Vector3()
-// 直近N フレームの速度を保持して平均方向を計算（ブレ軽減）
-const XR_VEL_HISTORY_SIZE = 6
-let xrVelHistory = []
+// 直近N フレームの手の位置を記録（移動距離ベースの投げ判定用）
+const XR_POS_HISTORY_SIZE = 8
+let xrPosHistory = []  // { pos: Vector3, time: number }
 let xrStoneMesh = null  // 手に持っている石のメッシュ
 let xrHandMesh = null   // 手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
@@ -1784,8 +1787,9 @@ async function toggleXR() {
 
 function xrAnimateLoop(timestamp, frame) {
   if (!frame) return
+  clock.update()
   const dt = Math.min(clock.getDelta(), 0.05)
-  const elapsed = clock.getElapsedTime()
+  const elapsed = clock.getElapsed()
 
   // 通常の更新処理
   updateWater(elapsed)
@@ -1869,7 +1873,7 @@ function xrAnimateLoop(timestamp, frame) {
         xrGrabFrames = 0
         xrPeakSpeed = 0
         xrPeakVelocity.set(0, 0, 0)
-        xrVelHistory = []
+        xrPosHistory = []
 
         if (!xrStoneMesh) {
           const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
@@ -1911,14 +1915,9 @@ function xrAnimateLoop(timestamp, frame) {
             glow.scale.set(pulse, pulse, pulse)
           }
         }
-        const speed = xrVelocity.length()
-        // 速度履歴を保持（方向の平均化用）
-        xrVelHistory.push(xrVelocity.clone())
-        if (xrVelHistory.length > XR_VEL_HISTORY_SIZE) xrVelHistory.shift()
-        if (speed > xrPeakSpeed) {
-          xrPeakSpeed = speed
-          xrPeakVelocity.copy(xrVelocity)
-        }
+        // 位置履歴を記録（移動距離ベースの投げ判定用）
+        xrPosHistory.push({ pos: worldPos.clone(), time: elapsed })
+        if (xrPosHistory.length > XR_POS_HISTORY_SIZE) xrPosHistory.shift()
       } else if (!gripPressed && xrGrabbing) {
         // 離した → 投石！
         xrGrabbing = false
@@ -1930,42 +1929,57 @@ function xrAnimateLoop(timestamp, frame) {
           xrStoneMesh = null
         }
 
-        if (xrGrabFrames >= 2 && xrPeakSpeed > 0.3) {
-          // 直近フレームの速度を平均して方向を安定化
-          const avgVel = new THREE.Vector3()
-          const hist = xrVelHistory
-          if (hist.length > 0) {
-            // 速度が大きいフレームほど重み付け（投げ動作部分を重視）
-            let totalWeight = 0
-            for (const v of hist) {
-              const w = v.length()
-              avgVel.addScaledVector(v, w)
-              totalWeight += w
+        if (xrGrabFrames >= 2 && xrPosHistory.length >= 2) {
+          // 直近の位置履歴から、手の実移動距離と方向を計算
+          const hist = xrPosHistory
+          const first = hist[0]
+          const last = hist[hist.length - 1]
+          const dt = last.time - first.time
+
+          // 始点→終点のベクトル（投げの方向）
+          const displacement = new THREE.Vector3().subVectors(last.pos, first.pos)
+          // 実際の経路長（各フレーム間距離の合計）
+          let pathLength = 0
+          for (let i = 1; i < hist.length; i++) {
+            pathLength += hist[i].pos.distanceTo(hist[i - 1].pos)
+          }
+
+          // 手の移動速度 = 経路長 / 時間（ノイズに強い）
+          const throwSpeed = dt > 0 ? pathLength / dt : 0
+
+          // 最低速度閾値（手ブレ: ~0.02m/frame → ~1.4m/s at 72Hz）
+          if (throwSpeed > 0.8) {
+            // 方向は始点→終点ベクトルから（経路長ではなく直線方向）
+            const LR_AMPLIFY = 2.0
+            const flatDisp = new THREE.Vector2(displacement.x * LR_AMPLIFY, displacement.z)
+            const flatLen = flatDisp.length()
+
+            let dirX, dirZ
+            if (flatLen > 0.01) {
+              dirX = flatDisp.x / flatLen
+              dirZ = flatDisp.y / flatLen
+            } else {
+              dirX = 0
+              dirZ = -1
             }
-            if (totalWeight > 0) avgVel.divideScalar(totalWeight)
+
+            // 指数カーブ: 遠くに飛ばすには指数的に力が必要
+            // throwSpeed 0.8→足元, 2.0→近い, 4.0→中距離, 6.0+→遠距離
+            const MIN_DIST = 0.5
+            const MAX_DIST = WATER_SIZE * 0.9  // 橋から池の反対端まで
+            const normalized = Math.min((throwSpeed - 0.8) / 6.0, 1)
+            const expDist = Math.pow(normalized, 3)  // 三乗カーブ
+            const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * expDist
+
+            // プレイヤー位置（橋の上）からの相対座標で着地点を計算
+            const playerX = 0
+            const playerZ = BRIDGE_Z
+            const halfW = WATER_SIZE / 2
+            const targetX = THREE.MathUtils.clamp(playerX + dirX * distance, -halfW, halfW)
+            const targetZ = THREE.MathUtils.clamp(playerZ + dirZ * distance, -halfW, halfW)
+
+            xrSubmitPost(targetX, targetZ, releaseWorldPos)
           }
-          // X成分を増幅して左右の投げを検出しやすくする
-          const LR_AMPLIFY = 2.0
-          const flatVel = new THREE.Vector2(avgVel.x * LR_AMPLIFY, avgVel.z)
-          const flatSpeed = flatVel.length()
-
-          let dirX, dirZ
-          if (flatSpeed > 0.05) {
-            dirX = flatVel.x / flatSpeed
-            dirZ = flatVel.y / flatSpeed
-          } else {
-            dirX = 0
-            dirZ = -1
-          }
-
-          // 速度に応じて飛距離が変わる（弱く→近く、強く→遠く）
-          const distance = THREE.MathUtils.lerp(2, WATER_SIZE * 0.45, Math.min(xrPeakSpeed / 3, 1))
-
-          const halfW = WATER_SIZE * 0.45
-          const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
-          const targetZ = THREE.MathUtils.clamp(dirZ * distance, -halfW, halfW)
-
-          xrSubmitPost(targetX, targetZ, releaseWorldPos)
         }
       }
     }

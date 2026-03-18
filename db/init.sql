@@ -18,8 +18,12 @@ CREATE TABLE IF NOT EXISTS posts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- サンプルデータを挿入（postsテーブルに合わせて修正）
-INSERT INTO posts (text) VALUES ('環境構築テスト');
+-- サンプルデータを挿入
+INSERT INTO posts (text, x, y, mass, heat) VALUES
+('SNSの即時性は本当に必要なのか？', -0.4, -0.3, 65, 40),
+('もっとゆっくり議論したい', 0.2, 0.2, 30, 10),
+('炎上は現代の焚き火である！！', 0.0, -0.1, 85, 70),
+('エコーチェンバーを壊すには', 0.35, 0.3, 45, 25);
 
 -- 新しいinteractionsテーブルを作成
 CREATE TABLE IF NOT EXISTS interactions (
