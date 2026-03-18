@@ -1965,15 +1965,18 @@ function xrAnimateLoop(timestamp, frame) {
 
             // 指数カーブ: 遠くに飛ばすには指数的に力が必要
             // throwSpeed 0.8→足元, 2.0→近い, 4.0→中距離, 6.0+→遠距離
-            const MIN_DIST = 0.3
-            const MAX_DIST = WATER_SIZE * 0.45
+            const MIN_DIST = 0.5
+            const MAX_DIST = WATER_SIZE * 0.9  // 橋から池の反対端まで
             const normalized = Math.min((throwSpeed - 0.8) / 6.0, 1)
             const expDist = Math.pow(normalized, 3)  // 三乗カーブ
             const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * expDist
 
-            const halfW = WATER_SIZE * 0.45
-            const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
-            const targetZ = THREE.MathUtils.clamp(dirZ * distance, -halfW, halfW)
+            // プレイヤー位置（橋の上）からの相対座標で着地点を計算
+            const playerX = 0
+            const playerZ = BRIDGE_Z
+            const halfW = WATER_SIZE / 2
+            const targetX = THREE.MathUtils.clamp(playerX + dirX * distance, -halfW, halfW)
+            const targetZ = THREE.MathUtils.clamp(playerZ + dirZ * distance, -halfW, halfW)
 
             xrSubmitPost(targetX, targetZ, releaseWorldPos)
           }
