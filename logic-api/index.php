@@ -76,6 +76,14 @@ switch ($request_uri) {
         }
         break;
 
+        case '/winds':
+        if ($request_method === 'POST') {
+            handleCreateWind();
+        } elseif ($request_method === 'GET') {
+            handleGetWinds();
+        }
+        break;
+
     default:
         http_response_code(404);
         echo json_encode(['error' => 'Endpoint not found']);
@@ -350,6 +358,40 @@ function handleGetHotTopics() {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Failed to retrieve hot topics: ' . $e->getMessage()]);
+    }
+}
+// AI要約（風）をDBに保存する関数
+function handleCreateWind() {
+    try {
+        $input = json_decode(file_get_contents('php://input'), true);
+        if (!isset($input['summary']) || !isset($input['post_ids'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'summary and post_ids are required']);
+            return;
+        }
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("INSERT INTO winds (summary, post_ids, created_at) VALUES (?, ?, NOW())");
+        $stmt->execute([$input['summary'], $input['post_ids']]);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'id' => $pdo->lastInsertId()]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save wind: ' . $e->getMessage()]);
+    }
+}
+
+// 保存されている要約一覧を取得する関数
+function handleGetWinds() {
+    try {
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("SELECT id, summary, post_ids, created_at FROM winds ORDER BY created_at DESC");
+        $stmt->execute();
+        $winds = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        http_response_code(200);
+        echo json_encode($winds);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to retrieve winds: ' . $e->getMessage()]);
     }
 }
 ?>

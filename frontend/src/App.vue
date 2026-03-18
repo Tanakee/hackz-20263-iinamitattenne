@@ -9,6 +9,13 @@
         <p>議論が波紋となり、風となって拡散される</p>
       </div>
 
+      <div class="wind-overlay" v-if="winds.length > 0">
+        <div v-for="(w, index) in winds.slice(0, 3)" :key="w.id" class="wind-message" :style="{ animationDelay: (index * 5) + 's' }">
+          <span class="wind-icon">🍃</span>
+          {{ w.summary }}
+        </div>
+      </div>
+
       <!-- 石詳細ポップアップ -->
       <Transition name="popup">
         <div v-if="selectedPost" class="stone-popup" :style="popupStyle" @click.stop>
@@ -148,6 +155,8 @@ const selectedPost = ref(null)
 const popupStyle = ref({})
 const showList = ref(false)
 
+const winds = ref([]);
+
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
 let waterMesh, waterGeo
@@ -277,6 +286,16 @@ function loadMockPosts() {
     { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0, scale: 85 },
     { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4, scale: 40 },
   ]
+  async function loadWinds() {
+  try {
+    const res = await fetch(`${logicApiUrl}/winds`)
+    if (res.ok) {
+      winds.value = await res.json()
+    }
+  } catch (error) {
+    console.error('風の取得に失敗しました:', error)
+  }
+}
 }
 
 // 一覧のソート（熱量順）
@@ -903,6 +922,15 @@ function createTerrain() {
     emissive: 0x0a0a0a,
     flatShading: true,
   })
+  onMounted(() => {
+  loadWinds(); // ← ここに追記！
+  loadPosts()
+  initThree()
+  animate()
+  checkApiStatus()
+  checkXRSupport()
+  window.addEventListener('resize', onResize)
+})
 
   for (const c of corners) {
     const geo = new THREE.DodecahedronGeometry(3 + Math.random() * 2, 1)
@@ -2404,6 +2432,43 @@ textarea::placeholder {
 }
 .remote-exit-btn:hover {
   background: rgba(255, 80, 80, 0.5);
+}
+
+/* --- AI要約（風）のアニメーション設定 --- */
+.wind-overlay {
+  position: absolute;
+  top: 15%;
+  width: 100%;
+  pointer-events: none;
+  z-index: 40;
+  overflow: hidden;
+  height: 120px;
+}
+
+.wind-message {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  padding: 10px 24px;
+  border-radius: 30px;
+  color: #e0f4ff;
+  border: 1px solid rgba(100, 200, 255, 0.2);
+  white-space: nowrap;
+  font-size: 0.95em;
+  animation: float-wind 15s linear infinite;
+  opacity: 0;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.wind-icon {
+  margin-right: 8px;
+}
+
+@keyframes float-wind {
+  0% { transform: translateX(100vw); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateX(-120vw); opacity: 0; }
 }
 
 </style>

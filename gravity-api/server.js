@@ -1,10 +1,29 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const mysql = require('mysql2/promise');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = 8080;
 const NLP_API_URL = process.env.NLP_API_URL || 'http://localhost:8001';
+
+// DB接続プール
+const dbConfig = {
+  host: process.env.DB_HOST || 'db',
+  user: process.env.DB_USER || 'hackz_user',
+  password: process.env.DB_PASSWORD || 'hackz_password',
+  database: process.env.DB_NAME || 'hackz_db',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+};
+const pool = mysql.createPool(dbConfig);
+
+// OpenAI クライアント初期化
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 // ミドルウェア
 app.use(cors());
@@ -13,6 +32,19 @@ app.use(bodyParser.json());
 // ヘルスチェック
 app.get('/api/health', (req, res) => {
   res.json({ status: 'Gravity API is running!' });
+});
+
+// GET /winds - 最新の風一覧を返却
+app.get('/api/winds', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id, summary, post_ids, created_at FROM winds ORDER BY created_at DESC LIMIT 50'
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({ error: 'Failed to fetch winds' });
+  }
 });
 
 // 最小文字数の定義
@@ -74,6 +106,77 @@ app.post('/api/calculate-mass', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// AI要約エンドポイント
+app.post('/api/summarize-hot-discussions', async (req, res) => {
+  try {
+    const { discussions } = req.body;
+
+    if (!discussions || !Array.isArray(discussions) || discussions.length === 0) {
+      return res.status(400).json({ error: 'Discussions array is required and must not be empty' });
+    }
+
+    // ディスカッションのテキストを連結
+    const combinedText = discussions.map(d => d.text || '').join('\n\n');
+
+    if (combinedText.trim().length === 0) {
+      return res.status(400).json({ error: 'No valid text found in discussions' });
+    }
+
+    // OpenAI APIで要約
+    const summary = await summarizeWithAI(combinedText);
+
+    // 投稿IDを抽出
+    const postIds = discussions.map(d => d.id).filter(id => id != null);
+
+    // DBに保存
+    const [result] = await pool.execute(
+      'INSERT INTO winds (summary, post_ids) VALUES (?, ?)',
+      [summary, JSON.stringify(postIds)]
+    );
+
+    res.json({
+      summary: summary,
+      wind_id: result.insertId,
+      original_discussions_count: discussions.length,
+      total_text_length: combinedText.length
+    });
+  } catch (error) {
+    console.error('Summarization error:', error);
+    res.status(500).json({ error: 'Failed to summarize discussions' });
+  }
+});
+
+// AI要約関数
+async function summarizeWithAI(text) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OpenAI API key not configured');
+    }
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたはディスカッションの要約を専門とするアシスタントです。与えられたテキストを簡潔に要約してください。'
+        },
+        {
+          role: 'user',
+          content: `以下のディスカッションを要約してください：\n\n${text}`
+        }
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
+    });
+
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.error('OpenAI API error:', error);
+    // フォールバック：テキストの最初の200文字を返す
+    return text.length > 200 ? text.substring(0, 200) + '...' : text;
+  }
+}
 
 // 質量計算ロジック
 function calculateMass(text) {
