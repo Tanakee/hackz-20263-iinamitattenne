@@ -308,19 +308,24 @@ async function loadWinds() {
   }
 }
 
-// デモデータ投入
+// デモデータ投入（既存データを残して追加）
 async function seedDemoData() {
   if (isDemoSeeding.value) return
   isDemoSeeding.value = true
   try {
     const res = await fetch(`${logicApiUrl}/demo-seed`, { method: 'POST' })
     if (res.ok) {
-      // 3Dシーンの既存石を削除
-      stoneMeshes.forEach(m => scene.remove(m))
-      stoneMeshes.length = 0
+      const data = await res.json()
+      // 既存のIDセットを記録
+      const existingIds = new Set(posts.value.map(p => p.id))
       // データ再読み込み
       await loadPosts()
-      posts.value.forEach(p => addStoneMesh(p))
+      // 新しく追加された投稿だけ3Dシーンに石を追加
+      posts.value.forEach(p => {
+        if (!existingIds.has(p.id)) {
+          addStoneMesh(p)
+        }
+      })
       await loadWinds()
     } else {
       console.error('デモデータ投入に失敗しました')
