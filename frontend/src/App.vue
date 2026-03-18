@@ -768,7 +768,7 @@ function initThree() {
   renderer.toneMappingExposure = 1.2
   container.appendChild(renderer.domElement)
 
-  clock = new THREE.Clock()
+  clock = new THREE.Timer()
 
   // OrbitControls（カメラ操作）
   controls = new OrbitControls(camera, renderer.domElement)
@@ -1540,8 +1540,9 @@ function handleClick(event) {
 let decayTimer = 0
 function animate() {
   animationId = requestAnimationFrame(animate)
+  clock.update()
   const dt = Math.min(clock.getDelta(), 0.05)
-  const elapsed = clock.getElapsedTime()
+  const elapsed = clock.getElapsed()
 
   updateWater(elapsed)
   updateRipples(dt)
@@ -1785,8 +1786,9 @@ async function toggleXR() {
 
 function xrAnimateLoop(timestamp, frame) {
   if (!frame) return
+  clock.update()
   const dt = Math.min(clock.getDelta(), 0.05)
-  const elapsed = clock.getElapsedTime()
+  const elapsed = clock.getElapsed()
 
   // 通常の更新処理
   updateWater(elapsed)
