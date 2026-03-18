@@ -326,10 +326,10 @@ async function seedDemoData() {
       const existingIds = new Set(posts.value.map(p => p.id))
       // データ再読み込み
       await loadPosts()
-      // 新しく追加された投稿だけ3Dシーンに石を追加（水底近くから出現）
+      // 新しく追加された投稿だけ3Dシーンに石を追加（水面から落下）
       posts.value.forEach(p => {
         if (!existingIds.has(p.id)) {
-          addStoneMesh(p, -7)
+          addStoneMesh(p)
         }
       })
       await loadWinds()
