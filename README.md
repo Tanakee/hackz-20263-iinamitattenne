@@ -74,6 +74,13 @@ POST /api/calculate-mass
   "message": "質量を計算しました",
   "text_length": 6,
   "gravity": 12.06,
+  "gravity_coefficient": 1.25,
+  "character_ratio": {
+    "kanji": 0.0,
+    "hiragana": 0.5,
+    "katakana": 0.0,
+    "alnum": 0.5
+  },
   "breakdown": {
     "base_mass": 0.6,
     "emotion_bonus": 120,

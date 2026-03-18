@@ -81,7 +81,7 @@
             </button>
           </div>
           <p v-if="lastMass !== null" class="mass-result">
-            質量: {{ lastMass }} / 重力: {{ lastGravity }} / 主語: {{ lastScale }}
+            質量: {{ lastMass }} / 重力: {{ lastGravity }} / 係数: {{ lastGravityCoef ?? 1 }} / 主語: {{ lastScale }}
           </p>
         </div>
 
@@ -141,6 +141,7 @@ const isSubmitting = ref(false)
 const lastMass = ref(null)
 const lastGravity = ref(null)
 const lastScale = ref(null)
+const lastGravityCoef = ref(null)
 
 // --- UI状態 ---
 const selectedPost = ref(null)
@@ -1478,9 +1479,11 @@ const submitPost = async () => {
         mass = data.mass
         gravity = data.gravity
         subjectScale = data.subject_scale ?? 30
+        lastGravityCoef.value = data.gravity_coefficient ?? 1
       }
     } catch {
       console.warn('Gravity API未接続。フォールバック値を使用')
+      lastGravityCoef.value = 1
     }
 
     lastMass.value = mass
@@ -1490,8 +1493,34 @@ const submitPost = async () => {
     // ランダムな着水位置（水面中央付近）
     const targetX = (Math.random() - 0.5) * WATER_SIZE * 0.6
     const targetZ = (Math.random() - 0.5) * WATER_SIZE * 0.6
-    throwStone(targetX, targetZ, mass, postText.value, subjectScale)
 
+    // Logic APIで投稿作成
+    try {
+      const createRes = await fetch(`${logicApiUrl}/posts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: postText.value,
+          x: targetX,
+          y: targetZ, // 3Dのzをyとして使用
+          mass: mass
+        })
+      })
+
+      if (createRes.ok) {
+        const createData = await createRes.json()
+        posts.value.push(createData.post)
+      } else {
+        const errorData = await createRes.json().catch(() => ({}))
+        throw new Error(errorData.error || '投稿作成に失敗しました')
+      }
+    } catch (logicError) {
+      console.error('Logic APIエラー:', logicError)
+      alert(`投稿作成に失敗しました: ${logicError.message}`)
+    }
+
+    // 3D表示は常に行う
+    throwStone(targetX, targetZ, mass, postText.value, subjectScale)
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
