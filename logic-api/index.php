@@ -181,21 +181,54 @@ function handleGetPosts() {
 }
 
 function handleWeatheringCheck() {
-    $input = json_decode(file_get_contents('php://input'), true);
+    try {
+        $input = json_decode(file_get_contents('php://input'), true);
 
-    if (!isset($input['post_id'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'post_id is required']);
-        return;
+        if (!isset($input['post_id'])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'post_id is required']);
+            return;
+        }
+
+        $post_id = $input['post_id'];
+        $pdo = getDBConnection();
+
+        // 対象の投稿を取得
+        $stmt = $pdo->prepare("SELECT id, created_at, weathered FROM posts WHERE id = ?");
+        $stmt->execute([$post_id]);
+        $post = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$post) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Post not found']);
+            return;
+        }
+
+        $created_timestamp = strtotime($post['created_at']);
+        $current_timestamp = time();
+        $elapsed_time_seconds = max(0, $current_timestamp - $created_timestamp); // 負の数を防止
+
+        // 風化度合い (0.0 〜 1.0)
+        $weathering_degree = min($elapsed_time_seconds / 86400, 1.0);
+        $is_weathered = ($elapsed_time_seconds >= 86400);
+
+        // 未風化から風化状態に変わる場合はDBを更新
+        if ($is_weathered && !$post['weathered']) {
+            $updateStmt = $pdo->prepare("UPDATE posts SET weathered = TRUE WHERE id = ?");
+            $updateStmt->execute([$post_id]);
+        }
+
+        http_response_code(200);
+        echo json_encode([
+            'weathered' => $is_weathered,
+            'weathering_degree' => $weathering_degree,
+            'elapsed_time_seconds' => $elapsed_time_seconds
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to check weathering: ' . $e->getMessage()]);
     }
-
-    // 簡易的な風化判定（24時間以上経過したら風化）
-    $created_timestamp = strtotime($input['created_at'] ?? 'now');
-    $current_timestamp = time();
-    $is_weathered = ($current_timestamp - $created_timestamp) > 86400;
-
-    http_response_code(200);
-    echo json_encode(['weathered' => $is_weathered]);
 }
 
 function handleHeatCalculation() {
