@@ -286,7 +286,9 @@ function loadMockPosts() {
     { id: 3, text: '炎上は現代の焚き火である！！', x: 0.0, z: -0.1, mass: 85, heat: 70, likes: 25, weathered: 0.0, scale: 85 },
     { id: 4, text: 'エコーチェンバーを壊すには', x: 0.35, z: 0.3, mass: 45, heat: 25, likes: 7, weathered: 0.4, scale: 40 },
   ]
-  async function loadWinds() {
+}
+
+async function loadWinds() {
   try {
     const res = await fetch(`${logicApiUrl}/winds`)
     if (res.ok) {
@@ -295,7 +297,6 @@ function loadMockPosts() {
   } catch (error) {
     console.error('風の取得に失敗しました:', error)
   }
-}
 }
 
 // 一覧のソート（熱量順）
