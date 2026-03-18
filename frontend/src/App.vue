@@ -341,30 +341,19 @@ async function decayHeat() {
     const scaleFactor = 1 - (p.scale ?? 30) / 150
     p.heat = Math.max(0, p.heat - 0.5 * scaleFactor)
 
-    // 風化チェック（定期的にAPI呼び出し）
-    if (Math.random() < 0.1) { // 10%の確率でチェック
-      try {
-        const weatherRes = await fetch(`${logicApiUrl}/weathering`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ post_id: p.id, created_at: p.created_at })
-        })
-        if (weatherRes.ok) {
-          const weatherData = await weatherRes.json()
-          p.weathered = weatherData.weathered ? 1.0 : 0.0
-        }
-      } catch (error) {
-        console.warn('風化チェックエラー:', error)
-        // エラー時はローカルで増やす
-        p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
-      }
+    // 熱量が一定ライン（20）を下回ると風化が進む
+    const WEATHERING_THRESHOLD = 20;
+    if (p.heat < WEATHERING_THRESHOLD) {
+      // 熱量が低いほど風化が早く進む
+      const speed = 0.005 + (WEATHERING_THRESHOLD - p.heat) * 0.0005;
+      p.weathered = Math.min(1, p.weathered + speed * scaleFactor);
     } else {
-      // APIチェックなし時はローカルで増やす
-      p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
+      // 熱量が閾値以上の場合は徐々に自己修復（風化が戻る）
+      p.weathered = Math.max(0, p.weathered - 0.01);
     }
 
-    // 熱量ゼロ → 沈没・消滅
-    if (p.heat <= 0 && p.weathered >= 0.8) {
+    // 風化が完全に進行（1.0に到達）したら沈没・消滅
+    if (p.weathered >= 1.0) {
       removeStoneMesh(p.id)
       posts.value.splice(i, 1)
       if (selectedPost.value && selectedPost.value.id === p.id) {
