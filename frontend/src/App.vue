@@ -1228,12 +1228,16 @@ function addStoneMesh(p, startY = 0) {
     mass: physicsMass,
     shape: new CANNON.Cylinder(physicsRadius, physicsRadius, physicsHalfHeight * 2, 8),
     position: new CANNON.Vec3(wx, startY, wz),
-    linearDamping: 0.9,   // 水中抵抗
-    angularDamping: 0.95,
+    linearDamping: startY > 0 ? 0 : 0.9,   // 空中は抵抗なし、水中は高抵抗
+    angularDamping: startY > 0 ? 0 : 0.95,
     material: physicsWorld._stoneMat,
     sleepSpeedLimit: 0.3,  // 早めにスリープ
     sleepTimeLimit: 1,
   })
+  // 上空から落下する場合は下方向の初速を付ける
+  if (startY > 0) {
+    body.velocity.set(0, -8, 0)
+  }
   physicsWorld.addBody(body)
 
   // startYが水面より上なら着水時に波紋を出すフラグを立てる
@@ -1609,9 +1613,11 @@ function updateStones(elapsed, dt) {
       s.group.position.copy(s.body.position)
       s.group.quaternion.copy(s.body.quaternion)
 
-      // 水面(y=0)を通過したら波紋を発生
+      // 水面(y=0)を通過したら波紋を発生＋水中抵抗を有効化
       if (s.needsRipple && s.body.position.y <= 0) {
         addRipple3D(s.body.position.x, s.body.position.z, s.post.mass, s.post.scale ?? 30)
+        s.body.linearDamping = 0.9
+        s.body.angularDamping = 0.95
         s.needsRipple = false
       }
     }
