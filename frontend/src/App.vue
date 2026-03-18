@@ -1574,8 +1574,8 @@ function onResize() {
 }
 
 // --- ライフサイクル ---
-onMounted(() => {
-  loadPosts()
+onMounted(async () => {
+  await loadPosts()
   initThree()
   animate()
   checkApiStatus()
