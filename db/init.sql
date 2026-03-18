@@ -2,6 +2,7 @@
 -- 詳細なスキーマはDay 1で設計予定
 
 USE hackz_db;
+SET NAMES utf8mb4;
 
 -- 既存のテストテーブルを削除
 DROP TABLE IF EXISTS test_table;

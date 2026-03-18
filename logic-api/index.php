@@ -2,7 +2,11 @@
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE');
 header('Access-Control-Allow-Headers: Content-Type');
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=utf-8');
+
+function json_encode_utf8($data) {
+    return json_encode($data, JSON_UNESCAPED_UNICODE);
+}
 
 // DB接続関数（シングルトン）
 function getDBConnection() {
@@ -13,7 +17,7 @@ function getDBConnection() {
         $pass = getenv('DB_PASSWORD') ?: 'hackz_password';
         $dbname = getenv('DB_NAME') ?: 'hackz_db';
         try {
-            $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $pass);
+            $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8mb4", $user, $pass);
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         } catch (PDOException $e) {
             throw new Exception('Database connection failed: ' . $e->getMessage());
@@ -31,7 +35,7 @@ switch ($request_uri) {
     case '/health':
         if ($request_method === 'GET') {
             http_response_code(200);
-            echo json_encode(['status' => 'Logic API is running!']);
+            echo json_encode_utf8(['status' => 'Logic API is running!']);
         }
         break;
 
@@ -42,10 +46,10 @@ switch ($request_uri) {
                 $stmt = $pdo->query("SELECT 1 as test");
                 $result = $stmt->fetch(PDO::FETCH_ASSOC);
                 http_response_code(200);
-                echo json_encode(['status' => 'DB connection successful', 'result' => $result]);
+                echo json_encode_utf8(['status' => 'DB connection successful', 'result' => $result]);
             } catch (Exception $e) {
                 http_response_code(500);
-                echo json_encode(['error' => 'DB test failed: ' . $e->getMessage()]);
+                echo json_encode_utf8(['error' => 'DB test failed: ' . $e->getMessage()]);
             }
         }
         break;
@@ -86,7 +90,7 @@ switch ($request_uri) {
 
     default:
         http_response_code(404);
-        echo json_encode(['error' => 'Endpoint not found']);
+        echo json_encode_utf8(['error' => 'Endpoint not found']);
         break;
 }
 
@@ -127,19 +131,19 @@ function handleCreatePost() {
         // バリデーション
         if (!isset($input['text']) || empty(trim($input['text']))) {
             http_response_code(400);
-            echo json_encode(['error' => 'Text is required and cannot be empty']);
+            echo json_encode_utf8(['error' => 'Text is required and cannot be empty']);
             return;
         }
 
         if (!isset($input['x']) || !is_numeric($input['x'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'Valid x coordinate is required']);
+            echo json_encode_utf8(['error' => 'Valid x coordinate is required']);
             return;
         }
 
         if (!isset($input['y']) || !is_numeric($input['y'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'Valid y coordinate is required']);
+            echo json_encode_utf8(['error' => 'Valid y coordinate is required']);
             return;
         }
 
@@ -163,7 +167,7 @@ function handleCreatePost() {
         $post = $stmt->fetch(PDO::FETCH_ASSOC);
 
         http_response_code(201);
-        echo json_encode([
+        echo json_encode_utf8([
             'success' => true,
             'post' => $post,
             'message' => 'Post created successfully'
@@ -171,7 +175,7 @@ function handleCreatePost() {
 
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to create post: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to create post: ' . $e->getMessage()]);
     }
 }
 
@@ -186,11 +190,11 @@ function handleGetPosts() {
 
         // レスポンスとしてJSON配列を返却
         http_response_code(200);
-        echo json_encode($posts);
+        echo json_encode_utf8($posts);
 
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to retrieve posts: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to retrieve posts: ' . $e->getMessage()]);
     }
 }
 
@@ -200,7 +204,7 @@ function handleWeatheringCheck() {
 
         if (!isset($input['post_id'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'post_id is required']);
+            echo json_encode_utf8(['error' => 'post_id is required']);
             return;
         }
 
@@ -214,7 +218,7 @@ function handleWeatheringCheck() {
 
         if (!$post) {
             http_response_code(404);
-            echo json_encode(['error' => 'Post not found']);
+            echo json_encode_utf8(['error' => 'Post not found']);
             return;
         }
 
@@ -233,7 +237,7 @@ function handleWeatheringCheck() {
         }
 
         http_response_code(200);
-        echo json_encode([
+        echo json_encode_utf8([
             'weathered' => $is_weathered,
             'weathering_degree' => $weathering_degree,
             'elapsed_time_seconds' => $elapsed_time_seconds
@@ -241,7 +245,7 @@ function handleWeatheringCheck() {
 
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to check weathering: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to check weathering: ' . $e->getMessage()]);
     }
 }
 
@@ -251,7 +255,7 @@ function handleHeatCalculation() {
 
         if (!isset($input['post_id'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'post_id is required']);
+            echo json_encode_utf8(['error' => 'post_id is required']);
             return;
         }
 
@@ -265,7 +269,7 @@ function handleHeatCalculation() {
 
         if (!$target_post) {
             http_response_code(404);
-            echo json_encode(['error' => 'Post not found']);
+            echo json_encode_utf8(['error' => 'Post not found']);
             return;
         }
 
@@ -314,7 +318,7 @@ function handleHeatCalculation() {
         $updateStmt->execute([$heat, $post_id]);
 
         http_response_code(200);
-        echo json_encode([
+        echo json_encode_utf8([
             'heat' => $heat, 
             'details' => [
                 'nearby_count' => $nearby_count,
@@ -327,7 +331,7 @@ function handleHeatCalculation() {
 
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to calculate heat: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to calculate heat: ' . $e->getMessage()]);
     }
 }
 
@@ -349,7 +353,7 @@ function handleGetHotTopics() {
         $hot_topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         http_response_code(200);
-        echo json_encode([
+        echo json_encode_utf8([
             'threshold' => $threshold,
             'count' => count($hot_topics),
             'hot_topics' => $hot_topics
@@ -357,7 +361,7 @@ function handleGetHotTopics() {
 
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to retrieve hot topics: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to retrieve hot topics: ' . $e->getMessage()]);
     }
 }
 // AI要約（風）をDBに保存する関数
@@ -366,17 +370,17 @@ function handleCreateWind() {
         $input = json_decode(file_get_contents('php://input'), true);
         if (!isset($input['summary']) || !isset($input['post_ids'])) {
             http_response_code(400);
-            echo json_encode(['error' => 'summary and post_ids are required']);
+            echo json_encode_utf8(['error' => 'summary and post_ids are required']);
             return;
         }
         $pdo = getDBConnection();
         $stmt = $pdo->prepare("INSERT INTO winds (summary, post_ids, created_at) VALUES (?, ?, NOW())");
         $stmt->execute([$input['summary'], $input['post_ids']]);
         http_response_code(201);
-        echo json_encode(['success' => true, 'id' => $pdo->lastInsertId()]);
+        echo json_encode_utf8(['success' => true, 'id' => $pdo->lastInsertId()]);
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to save wind: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to save wind: ' . $e->getMessage()]);
     }
 }
 
@@ -388,10 +392,10 @@ function handleGetWinds() {
         $stmt->execute();
         $winds = $stmt->fetchAll(PDO::FETCH_ASSOC);
         http_response_code(200);
-        echo json_encode($winds);
+        echo json_encode_utf8($winds);
     } catch (Exception $e) {
         http_response_code(500);
-        echo json_encode(['error' => 'Failed to retrieve winds: ' . $e->getMessage()]);
+        echo json_encode_utf8(['error' => 'Failed to retrieve winds: ' . $e->getMessage()]);
     }
 }
 ?>
