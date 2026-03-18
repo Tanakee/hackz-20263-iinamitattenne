@@ -81,7 +81,7 @@
             </button>
           </div>
           <p v-if="lastMass !== null" class="mass-result">
-            質量: {{ lastMass }} / 重力: {{ lastGravity }} / 主語: {{ lastScale }}
+            質量: {{ lastMass }} / 重力: {{ lastGravity }} / 係数: {{ lastGravityCoef ?? 1 }} / 主語: {{ lastScale }}
           </p>
         </div>
 
@@ -141,6 +141,7 @@ const isSubmitting = ref(false)
 const lastMass = ref(null)
 const lastGravity = ref(null)
 const lastScale = ref(null)
+const lastGravityCoef = ref(null)
 
 // --- UI状態 ---
 const selectedPost = ref(null)
@@ -1554,9 +1555,11 @@ const submitPost = async () => {
         mass = data.mass
         gravity = data.gravity
         subjectScale = data.subject_scale ?? 30
+        lastGravityCoef.value = data.gravity_coefficient ?? 1
       }
     } catch {
       console.warn('Gravity API未接続。フォールバック値を使用')
+      lastGravityCoef.value = 1
     }
 
     lastMass.value = mass
@@ -1582,22 +1585,18 @@ const submitPost = async () => {
 
       if (createRes.ok) {
         const createData = await createRes.json()
-        // 新しい投稿を一覧に追加
         posts.value.push(createData.post)
-        // 3Dメッシュ作成
-        throwStone(targetX, targetZ, mass, postText.value, subjectScale)
       } else {
-        const errorData = await createRes.json()
+        const errorData = await createRes.json().catch(() => ({}))
         throw new Error(errorData.error || '投稿作成に失敗しました')
       }
     } catch (logicError) {
       console.error('Logic APIエラー:', logicError)
-      // APIエラー時も3D表示は行う（モックとして）
-      throwStone(targetX, targetZ, mass, postText.value, subjectScale)
-      // エラーメッセージを表示
       alert(`投稿作成に失敗しました: ${logicError.message}`)
     }
 
+    // 3D表示は常に行う
+    throwStone(targetX, targetZ, mass, postText.value, subjectScale)
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)

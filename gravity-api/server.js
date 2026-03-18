@@ -59,7 +59,9 @@ app.post('/api/calculate-mass', async (req, res) => {
       mass: result.total_mass,
       message: '質量を計算しました',
       text_length: text.length,
-      gravity: result.total_mass * 0.1,
+      gravity: Math.round(result.total_mass * 0.1 * (result.gravity_coefficient ?? 1.0) * 10) / 10,
+      gravity_coefficient: result.gravity_coefficient,
+      character_ratio: result.character_ratio,
       subject_scale: subjectScale,
       breakdown: {
         base_mass: result.base_mass,
@@ -75,6 +77,31 @@ app.post('/api/calculate-mass', async (req, res) => {
 
 // 質量計算ロジック
 function calculateMass(text) {
+  // 文字種の割合を計算
+  const clean = text.replace(/\s/g, '');
+  const totalChars = Math.max(clean.length, 1);
+  const kanjiCount = (clean.match(/\p{Script=Han}/gu) || []).length;
+  const hiraganaCount = (clean.match(/\p{Script=Hiragana}/gu) || []).length;
+  const katakanaCount = (clean.match(/\p{Script=Katakana}/gu) || []).length;
+  const alnumCount = (clean.match(/[A-Za-z0-9]/g) || []).length;
+
+  const ratios = {
+    kanji: kanjiCount / totalChars,
+    hiragana: hiraganaCount / totalChars,
+    katakana: katakanaCount / totalChars,
+    alnum: alnumCount / totalChars,
+  };
+
+  // 重力係数: 漢字が多ければ重く、ひらがなが多ければ軽めに
+  let gravityCoefficient = 1.0;
+  if (ratios.kanji >= 0.4) {
+    gravityCoefficient = 1.25; // 重厚な意見
+  } else if (ratios.hiragana >= 0.4) {
+    gravityCoefficient = 0.85; // 軽い意見
+  } else if (ratios.katakana >= 0.4) {
+    gravityCoefficient = 1.0; // 外来語・専門用語
+  }
+
   // 基本的な質量 = 文字数 × 係数
   const baseMass = text.length * 0.1;
 
@@ -95,7 +122,14 @@ function calculateMass(text) {
     emotion_bonus: emotionBonus,
     length_bonus: lengthBonus,
     paragraph_bonus: paragraphBonus,
-    total_mass: Math.round(totalMass * 10) / 10
+    total_mass: Math.round(totalMass * 10) / 10,
+    gravity_coefficient: gravityCoefficient,
+    character_ratio: {
+      kanji: Math.round(ratios.kanji * 1000) / 1000,
+      hiragana: Math.round(ratios.hiragana * 1000) / 1000,
+      katakana: Math.round(ratios.katakana * 1000) / 1000,
+      alnum: Math.round(ratios.alnum * 1000) / 1000,
+    }
   };
 }
 
