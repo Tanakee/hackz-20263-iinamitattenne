@@ -111,6 +111,11 @@
             :disabled="isDemoSeeding"
             @click="seedDemoData"
           >{{ isDemoSeeding ? '投入中...' : 'デモデータ投入' }}</button>
+          <button
+            class="reset-data-btn"
+            :disabled="isResetting"
+            @click="resetAllData"
+          >{{ isResetting ? 'リセット中...' : 'データリセット' }}</button>
         </div>
       </div>
     </div>
@@ -165,6 +170,7 @@ const showList = ref(false)
 
 const winds = ref([]);
 const isDemoSeeding = ref(false);
+const isResetting = ref(false);
 
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
@@ -334,6 +340,28 @@ async function seedDemoData() {
     console.error('デモデータ投入エラー:', error)
   } finally {
     isDemoSeeding.value = false
+  }
+}
+
+// 全データリセット
+async function resetAllData() {
+  if (isResetting.value) return
+  isResetting.value = true
+  try {
+    const res = await fetch(`${logicApiUrl}/reset-data`, { method: 'POST' })
+    if (res.ok) {
+      stoneMeshes.forEach(m => scene.remove(m))
+      stoneMeshes.length = 0
+      posts.value = []
+      winds.value = []
+      selectedPost.value = null
+    } else {
+      console.error('データリセットに失敗しました')
+    }
+  } catch (error) {
+    console.error('データリセットエラー:', error)
+  } finally {
+    isResetting.value = false
   }
 }
 
@@ -2551,6 +2579,25 @@ textarea::placeholder {
   background: rgba(255, 160, 50, 0.45);
 }
 .demo-seed-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.reset-data-btn {
+  margin-top: 6px;
+  padding: 6px 14px;
+  background: rgba(255, 70, 70, 0.2);
+  border: 1px solid rgba(255, 70, 70, 0.4);
+  color: #ffaaaa;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+  width: 100%;
+}
+.reset-data-btn:hover {
+  background: rgba(255, 70, 70, 0.4);
+}
+.reset-data-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

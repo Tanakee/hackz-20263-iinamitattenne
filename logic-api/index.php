@@ -94,6 +94,12 @@ switch ($request_uri) {
         }
         break;
 
+    case '/reset-data':
+        if ($request_method === 'POST') {
+            handleResetData();
+        }
+        break;
+
     default:
         http_response_code(404);
         echo json_encode_utf8(['error' => 'Endpoint not found']);
@@ -459,6 +465,28 @@ function handleDemoSeed() {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode_utf8(['error' => 'デモデータ投入に失敗: ' . $e->getMessage()]);
+    }
+}
+
+// 全データリセット
+function handleResetData() {
+    try {
+        $pdo = getDBConnection();
+        $pdo->exec("DELETE FROM interactions");
+        $pdo->exec("DELETE FROM winds");
+        $pdo->exec("DELETE FROM posts");
+        $pdo->exec("ALTER TABLE posts AUTO_INCREMENT = 1");
+        $pdo->exec("ALTER TABLE interactions AUTO_INCREMENT = 1");
+        $pdo->exec("ALTER TABLE winds AUTO_INCREMENT = 1");
+
+        http_response_code(200);
+        echo json_encode_utf8([
+            'success' => true,
+            'message' => '全データをリセットしました'
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode_utf8(['error' => 'リセットに失敗: ' . $e->getMessage()]);
     }
 }
 ?>
