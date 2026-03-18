@@ -1934,12 +1934,11 @@ function xrAnimateLoop(timestamp, frame) {
           xrStoneMesh = null
         }
 
-        if (xrGrabFrames >= 3 && xrPeakSpeed > 1.2) {
+        if (xrGrabFrames >= 2 && xrPeakSpeed > 0.15) {
           // 直近フレームの速度を平均して方向を安定化
           const avgVel = new THREE.Vector3()
           const hist = xrVelHistory
           if (hist.length > 0) {
-            // 速度が大きいフレームほど重み付け（投げ動作部分を重視）
             let totalWeight = 0
             for (const v of hist) {
               const w = v.length()
@@ -1962,8 +1961,12 @@ function xrAnimateLoop(timestamp, frame) {
             dirZ = -1
           }
 
-          // 速度に応じて飛距離が変わる（しっかり振らないと遠くに飛ばない）
-          const distance = THREE.MathUtils.lerp(2, WATER_SIZE * 0.45, Math.min((xrPeakSpeed - 1.0) / 4, 1))
+          // 二乗カーブで飛距離を計算（弱い力→手前、強い力→遠く）
+          // speed 0.15 → ほぼ足元、speed 3.0+ → 最大距離
+          const MIN_DIST = 0.5  // 足元
+          const MAX_DIST = WATER_SIZE * 0.45
+          const normalizedPower = Math.min(xrPeakSpeed / 3.0, 1)
+          const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * normalizedPower * normalizedPower
 
           const halfW = WATER_SIZE * 0.45
           const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
