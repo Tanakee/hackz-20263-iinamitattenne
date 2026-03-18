@@ -1581,6 +1581,12 @@ onMounted(async () => {
   checkApiStatus()
   checkXRSupport()
   window.addEventListener('resize', onResize)
+  // ローディング画面をフェードアウト
+  const loader = document.getElementById('initial-loading')
+  if (loader) {
+    loader.classList.add('fade-out')
+    setTimeout(() => loader.remove(), 600)
+  }
 })
 
 onUnmounted(() => {
