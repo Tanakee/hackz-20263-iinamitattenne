@@ -6,6 +6,9 @@
 USE hackz_db;
 SET NAMES utf8mb4;
 
+-- weatheredカラムをFLOATに変更（BOOLEANだと中間値が保存できない）
+ALTER TABLE posts MODIFY COLUMN weathered FLOAT DEFAULT 0;
+
 -- 既存データをクリア
 DELETE FROM interactions;
 DELETE FROM winds;

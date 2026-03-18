@@ -268,7 +268,7 @@ async function loadPosts() {
         likes: post.likes || 0, // likesがなければ0
         scale: post.scale || 30, // scaleがなければ30
         z: post.y, // yをzとして使用（3D座標）
-        weathered: post.weathered ? 1.0 : 0.0 // booleanを数値に変換
+        weathered: parseFloat(post.weathered) || 0 // 風化度（0.0〜1.0）
       }))
       apiStatus.value = '接続済み'
     } else {
