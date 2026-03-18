@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS test_table;
 -- 新しいpostsテーブルを作成
 CREATE TABLE IF NOT EXISTS posts (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    text TEXT NOT NULL,
+    text TEXT CHARACTER SET utf8mb4 NOT NULL,
     x FLOAT,
     y FLOAT,
     mass FLOAT,
