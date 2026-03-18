@@ -118,6 +118,23 @@
           >{{ isResetting ? 'リセット中...' : 'データリセット' }}</button>
         </div>
       </div>
+
+      <!-- サメカットイン演出 -->
+      <Transition name="cutin">
+        <div v-if="sharkCutinActive" class="shark-cutin-overlay">
+          <div class="cutin-bar cutin-bar-top"></div>
+          <div class="cutin-bar cutin-bar-bottom"></div>
+          <div class="cutin-center">
+            <div class="cutin-flash"></div>
+            <div class="cutin-shark">
+              <span class="cutin-shark-emoji">🦈</span>
+              <span class="cutin-shark-text">サメ 襲来</span>
+            </div>
+            <div class="cutin-line cutin-line-left"></div>
+            <div class="cutin-line cutin-line-right"></div>
+          </div>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -260,6 +277,14 @@ const ripples = []
 // スプラッシュパーティクル
 let splashParticles = null
 let splashData = []
+// 泡パーティクル
+let bubbleParticles = null
+let bubbleData = []
+// 魚データ
+const fishes = []
+// サメ
+let shark = null
+const sharkCutinActive = ref(false)
 // 水柱データ
 const waterColumns = []
 // 飛行中の石
@@ -277,10 +302,13 @@ async function loadPosts() {
       const postsData = await res.json()
       posts.value = postsData.map(post => ({
         ...post,
-        likes: post.likes || 0, // likesがなければ0
-        scale: post.scale || 30, // scaleがなければ30
-        z: post.y, // yをzとして使用（3D座標）
-        weathered: parseFloat(post.weathered) || 0 // 風化度（0.0〜1.0）
+        likes: post.likes || 0,
+        scale: post.scale || 30,
+        heat: parseFloat(post.heat) || 0,
+        mass: parseFloat(post.mass) || 0,
+        x: parseFloat(post.x) || 0,
+        z: parseFloat(post.y) || 0,
+        weathered: parseFloat(post.weathered) || 0,
       }))
       apiStatus.value = '接続済み'
     } else {
@@ -401,6 +429,7 @@ async function likePost(post) {
   } catch (error) {
     console.error('いいねエラー:', error)
     // エラー時はローカルで増やす
+    post.heat = Math.min(100, post.heat + 10)
     post.likes = (post.likes || 0) + 1
     post.heat = Math.min(100, post.heat + 10)
     playLikeSound()
@@ -426,16 +455,19 @@ function updateStoneMeshAppearance(entry, elapsed = 0) {
   const g = color.g * (1 - w) + gray * w
   const b = color.b * (1 - w) + gray * w
 
-  // 石本体の色をグレーに
-  const stoneGray = 0.533 * (1 - w) + 0.3 * w  // 元の0x888888=0.533
-  stoneChild.material.color.setRGB(stoneGray, stoneGray, stoneGray)
+  // 石本体の色: 熱量に応じてグレー→赤
+  const heatRatio = Math.min((parseFloat(p.heat) || 0) / 100, 1)  // 0〜1
+  const baseGray = 0.45 * (1 - w) + 0.25 * w   // 風化でさらに暗く
+  const stoneR = baseGray + heatRatio * 0.55     // 熱いほど赤く
+  const stoneG = baseGray * (1 - heatRatio * 0.6) // 熱いほど緑を減らす
+  const stoneB = baseGray * (1 - heatRatio * 0.7) // 熱いほど青を減らす
+  stoneChild.material.color.setRGB(stoneR, stoneG, stoneB)
 
-  // 熱量20以上: 青い境界線エミッシブ / 未満: 暗く
-  if (p.heat >= 20) {
-    stoneChild.material.emissive.setRGB(0, 0.1 * (p.heat / 100), 0.3 * (p.heat / 100))
-  } else {
-    stoneChild.material.emissive.setRGB(r * 0.05, g * 0.05, b * 0.05)
-  }
+  // emissive: 熱量に応じて赤く発光
+  const emR = heatRatio * 0.4
+  const emG = heatRatio * 0.05
+  const emB = 0
+  stoneChild.material.emissive.setRGB(emR * (1 - w), emG * (1 - w), emB)
 
   // 風化度70%以上: 脈動アニメーション
   let opacity = Math.max(0.15, 1 - w * 0.85)
@@ -445,13 +477,13 @@ function updateStoneMeshAppearance(entry, elapsed = 0) {
   }
   stoneChild.material.opacity = opacity
 
-  // 境界線リング（熱量20以上のみ青く光る）
+  // 境界線リング（熱量20以上で赤〜オレンジに光る）
   let ring = entry.group.getObjectByName('heatRing')
   if (p.heat >= 20) {
     if (!ring) {
       const ringGeo = new THREE.TorusGeometry(entry.size * 1.3, 0.04, 8, 32)
       const ringMat = new THREE.MeshBasicMaterial({
-        color: 0x44aaff,
+        color: 0xff6633,
         transparent: true,
         depthWrite: false,
       })
@@ -1012,8 +1044,550 @@ function initThree() {
   splashParticles = new THREE.Points(splashGeo, splashMat)
   scene.add(splashParticles)
 
+  // 泡用パーティクルシステム
+  const bubbleGeo = new THREE.BufferGeometry()
+  const maxBubble = 200
+  const bubblePositions = new Float32Array(maxBubble * 3)
+  bubbleGeo.setAttribute('position', new THREE.BufferAttribute(bubblePositions, 3))
+  const bubbleMat = new THREE.PointsMaterial({
+    color: 0xffccaa,
+    size: 0.35,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+  })
+  bubbleParticles = new THREE.Points(bubbleGeo, bubbleMat)
+  scene.add(bubbleParticles)
+
+  // 魚を配置
+  createFishes()
+
   // 初期の石を配置
   createStoneMeshes()
+}
+
+// --- 魚 ---
+function createFishMesh(color) {
+  const group = new THREE.Group()
+
+  // 胴体（楕円球）
+  const bodyGeo = new THREE.SphereGeometry(0.4, 8, 6)
+  const positions = bodyGeo.attributes.position
+  for (let i = 0; i < positions.count; i++) {
+    const x = positions.getX(i)
+    const y = positions.getY(i)
+    const z = positions.getZ(i)
+    positions.setXYZ(i, x * 2.0, y * 0.7, z * 0.8)
+  }
+  bodyGeo.computeVertexNormals()
+  const bodyMat = new THREE.MeshPhongMaterial({
+    color,
+    emissive: new THREE.Color(color).multiplyScalar(0.2),
+    specular: 0x444444,
+    shininess: 30,
+    transparent: true,
+    opacity: 0.85,
+  })
+  const body = new THREE.Mesh(bodyGeo, bodyMat)
+  group.add(body)
+
+  // 尾びれ
+  const tailGeo = new THREE.ConeGeometry(0.3, 0.5, 4)
+  const tailMat = new THREE.MeshPhongMaterial({
+    color,
+    emissive: new THREE.Color(color).multiplyScalar(0.15),
+    transparent: true,
+    opacity: 0.8,
+  })
+  const tail = new THREE.Mesh(tailGeo, tailMat)
+  tail.rotation.z = Math.PI / 2
+  tail.position.x = -0.9
+  tail.name = 'tail'
+  group.add(tail)
+
+  // 目（白丸＋黒丸）
+  const eyeWhite = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  )
+  eyeWhite.position.set(0.55, 0.12, 0.25)
+  group.add(eyeWhite)
+  const eyeBlack = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0x000000 })
+  )
+  eyeBlack.position.set(0.6, 0.12, 0.28)
+  group.add(eyeBlack)
+
+  group.scale.set(0.8, 0.8, 0.8)
+  return group
+}
+
+// style: 'cold' | 'hot' | 'shark' | デフォルト
+function createSpeechBubble(text, style = 'default') {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  canvas.width = 640
+  canvas.height = 100
+
+  // スタイル別の色
+  const styles = {
+    cold:    { bg: 'rgba(30, 80, 180, 0.92)',  border: 'rgba(100, 180, 255, 0.8)', text: '#ffffff' },
+    hot:     { bg: 'rgba(180, 30, 20, 0.92)',   border: 'rgba(255, 130, 100, 0.8)', text: '#ffffff' },
+    shark:   { bg: 'rgba(20, 20, 30, 0.95)',    border: 'rgba(150, 160, 180, 0.7)', text: '#ffffff' },
+    default: { bg: 'rgba(255, 255, 255, 0.92)', border: 'rgba(0, 0, 0, 0.3)',       text: '#333333' },
+  }
+  const s = styles[style] || styles.default
+
+  // 背景
+  ctx.fillStyle = s.bg
+  ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 16)
+  ctx.fill()
+  ctx.strokeStyle = s.border
+  ctx.lineWidth = 4
+  ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 16)
+  ctx.stroke()
+
+  // テキスト（縁取り付き）
+  ctx.font = 'bold 40px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineWidth = 5
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)'
+  ctx.strokeText(text, canvas.width / 2, canvas.height / 2)
+  ctx.fillStyle = s.text
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+  })
+  const sprite = new THREE.Sprite(mat)
+  sprite.scale.set(5.5, 0.85, 1)
+  sprite.renderOrder = 3
+  // ポップアニメーション用
+  sprite.userData.popTime = 0
+  sprite.userData.targetScale = { x: 5.5, y: 0.85 }
+  sprite.scale.set(0.01, 0.01, 1) // 最初は極小
+  return sprite
+}
+
+// 吹き出しポップアニメーション（バウンド付きスケールイン）
+function animateSpeechPop(sprite, dt) {
+  if (!sprite.userData.targetScale) return
+  sprite.userData.popTime += dt
+  const t = Math.min(sprite.userData.popTime / 0.35, 1) // 0.35秒で完了
+  // バウンスイージング
+  let scale
+  if (t < 0.6) {
+    scale = (t / 0.6) * 1.15 // オーバーシュート
+  } else if (t < 0.8) {
+    scale = 1.15 - ((t - 0.6) / 0.2) * 0.15 // 戻る
+  } else {
+    scale = 1.0
+  }
+  const ts = sprite.userData.targetScale
+  sprite.scale.set(ts.x * scale, ts.y * scale, 1)
+}
+
+function createFishes() {
+  const half = WATER_SIZE / 2 * 0.8
+  const fishConfigs = [
+    { type: 'cold', color: 0x3388ff },
+    { type: 'cold', color: 0x3388ff },
+    { type: 'hot',  color: 0xff4433 },
+    { type: 'hot',  color: 0xff4433 },
+  ]
+
+  for (const cfg of fishConfigs) {
+    const mesh = createFishMesh(cfg.color)
+    const x = (Math.random() - 0.5) * half * 2
+    const z = (Math.random() - 0.5) * half * 2
+    const y = -3 - Math.random() * 4
+    mesh.position.set(x, y, z)
+    scene.add(mesh)
+
+    // ランダムな目標地点
+    const targetX = (Math.random() - 0.5) * half * 2
+    const targetZ = (Math.random() - 0.5) * half * 2
+
+    fishes.push({
+      mesh,
+      type: cfg.type,
+      speed: 1.5 + Math.random() * 1.5,
+      targetX,
+      targetZ,
+      targetY: -2 - Math.random() * 5,
+      speech: null,         // 吹き出しsprite
+      speechTimer: 0,       // 吹き出し表示残り時間
+      cooldown: 0,          // 石との接触クールダウン
+      tailPhase: Math.random() * Math.PI * 2,
+    })
+  }
+}
+
+function updateFishes(dt, elapsed) {
+  const half = WATER_SIZE / 2 * 0.8
+  const INTERACT_DIST = 3.0
+  const HEAT_CHANGE = 5
+
+  for (const f of fishes) {
+    if (f.eaten) continue
+    // --- 移動 ---
+    const dx = f.targetX - f.mesh.position.x
+    const dy = f.targetY - f.mesh.position.y
+    const dz = f.targetZ - f.mesh.position.z
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    if (dist < 1.0) {
+      // 新しい目標地点
+      f.targetX = (Math.random() - 0.5) * half * 2
+      f.targetZ = (Math.random() - 0.5) * half * 2
+      f.targetY = -2 - Math.random() * 5
+    }
+
+    const moveSpeed = f.speed * dt
+    if (dist > 0.01) {
+      f.mesh.position.x += (dx / dist) * moveSpeed
+      f.mesh.position.y += (dy / dist) * moveSpeed
+      f.mesh.position.z += (dz / dist) * moveSpeed
+    }
+
+    // 進行方向を向く
+    const angle = Math.atan2(dx, dz)
+    f.mesh.rotation.y = angle
+
+    // 尾びれアニメーション
+    f.tailPhase += dt * 8
+    const tail = f.mesh.getObjectByName('tail')
+    if (tail) {
+      tail.rotation.y = Math.sin(f.tailPhase) * 0.4
+    }
+
+    // 上下に軽くゆらゆら
+    f.mesh.position.y += Math.sin(elapsed * 2 + f.tailPhase) * 0.003
+
+    // --- 石との接触判定 ---
+    f.cooldown = Math.max(0, f.cooldown - dt)
+
+    if (f.cooldown <= 0) {
+      for (const s of stoneMeshes) {
+        if (s.sinking) continue
+        const sx = s.group.position.x - f.mesh.position.x
+        const sy = s.group.position.y - f.mesh.position.y
+        const sz = s.group.position.z - f.mesh.position.z
+        const sDist = Math.sqrt(sx * sx + sy * sy + sz * sz)
+
+        if (sDist < INTERACT_DIST) {
+          if (f.type === 'cold') {
+            s.post.heat = Math.max(0, (parseFloat(s.post.heat) || 0) - HEAT_CHANGE)
+            showFishSpeech(f, 'う、魚w')
+          } else {
+            s.post.heat = Math.min(100, (parseFloat(s.post.heat) || 0) + HEAT_CHANGE)
+            showFishSpeech(f, 'う、うおおおおおお！')
+          }
+          updateStoneMeshAppearance(s)
+          f.cooldown = 4 + Math.random() * 3 // 4〜7秒クールダウン
+          break
+        }
+      }
+    }
+
+    // --- 吹き出し更新 ---
+    if (f.speechTimer > 0) {
+      f.speechTimer -= dt
+      if (f.speech) {
+        f.speech.position.set(
+          f.mesh.position.x,
+          f.mesh.position.y + 1.5,
+          f.mesh.position.z
+        )
+        // ポップアニメーション
+        animateSpeechPop(f.speech, dt)
+        // フェードアウト
+        if (f.speechTimer < 0.5) {
+          f.speech.material.opacity = f.speechTimer / 0.5
+        }
+      }
+      if (f.speechTimer <= 0 && f.speech) {
+        scene.remove(f.speech)
+        f.speech.material.dispose()
+        f.speech.material.map.dispose()
+        f.speech = null
+      }
+    }
+  }
+}
+
+function showFishSpeech(fish, text) {
+  // 既存の吹き出しを削除
+  if (fish.speech) {
+    scene.remove(fish.speech)
+    fish.speech.material.dispose()
+    fish.speech.material.map.dispose()
+  }
+  const sprite = createSpeechBubble(text, fish.type === 'cold' ? 'cold' : 'hot')
+  sprite.position.set(
+    fish.mesh.position.x,
+    fish.mesh.position.y + 1.2,
+    fish.mesh.position.z
+  )
+  scene.add(sprite)
+  fish.speech = sprite
+  fish.speechTimer = 2.5
+}
+
+// --- サメ ---
+function createSharkMesh() {
+  const group = new THREE.Group()
+
+  // 胴体
+  const bodyGeo = new THREE.SphereGeometry(0.6, 8, 6)
+  const pos = bodyGeo.attributes.position
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i)
+    const y = pos.getY(i)
+    const z = pos.getZ(i)
+    // 前を尖らせ、後ろも少し伸ばす
+    const xScale = x > 0 ? 3.5 : 2.5
+    pos.setXYZ(i, x * xScale, y * 0.6, z * 0.7)
+  }
+  bodyGeo.computeVertexNormals()
+  const bodyMat = new THREE.MeshPhongMaterial({
+    color: 0x556677,
+    emissive: 0x112233,
+    specular: 0x333333,
+    shininess: 20,
+    transparent: true,
+    opacity: 0.9,
+  })
+  group.add(new THREE.Mesh(bodyGeo, bodyMat))
+
+  // 背びれ
+  const finGeo = new THREE.ConeGeometry(0.25, 0.8, 4)
+  const finMat = new THREE.MeshPhongMaterial({ color: 0x445566, emissive: 0x112233 })
+  const dorsal = new THREE.Mesh(finGeo, finMat)
+  dorsal.position.set(-0.2, 0.5, 0)
+  dorsal.rotation.z = 0.15
+  group.add(dorsal)
+
+  // 尾びれ
+  const tailGeo = new THREE.ConeGeometry(0.4, 0.8, 4)
+  const tailMat = new THREE.MeshPhongMaterial({ color: 0x445566, emissive: 0x112233 })
+  const tail = new THREE.Mesh(tailGeo, tailMat)
+  tail.rotation.z = Math.PI / 2
+  tail.position.x = -1.7
+  tail.name = 'sharkTail'
+  group.add(tail)
+
+  // 目
+  const eyeW = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  )
+  eyeW.position.set(1.4, 0.15, 0.35)
+  group.add(eyeW)
+  const eyeB = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0x000000 })
+  )
+  eyeB.position.set(1.48, 0.15, 0.38)
+  group.add(eyeB)
+
+  // 口（赤い線）
+  const mouthGeo = new THREE.BoxGeometry(0.6, 0.03, 0.35)
+  const mouthMat = new THREE.MeshBasicMaterial({ color: 0x991111 })
+  const mouth = new THREE.Mesh(mouthGeo, mouthMat)
+  mouth.position.set(1.5, -0.1, 0)
+  group.add(mouth)
+
+  group.scale.set(1.2, 1.2, 1.2)
+  return group
+}
+
+function spawnShark() {
+  if (shark || sharkCutinActive.value) return
+  // 赤い魚がいなければ出現しない
+  const hotFishes = fishes.filter(f => f.type === 'hot' && !f.eaten)
+  if (hotFishes.length === 0) return
+
+  // カットイン演出を開始
+  sharkCutinActive.value = true
+
+  // カットイン終了後にサメを実際に配置
+  setTimeout(() => {
+    sharkCutinActive.value = false
+
+    const mesh = createSharkMesh()
+    const half = WATER_SIZE / 2
+
+    // 池の端から登場
+    const side = Math.floor(Math.random() * 4)
+    let startX, startZ
+    if (side === 0)      { startX = -half - 5; startZ = (Math.random() - 0.5) * half }
+    else if (side === 1) { startX = half + 5;  startZ = (Math.random() - 0.5) * half }
+    else if (side === 2) { startX = (Math.random() - 0.5) * half; startZ = -half - 5 }
+    else                 { startX = (Math.random() - 0.5) * half; startZ = half + 5 }
+
+    mesh.position.set(startX, -3, startZ)
+    scene.add(mesh)
+
+    shark = {
+      mesh,
+      speed: 4,
+      targetFish: null,
+      speech: null,
+      speechTimer: 0,
+      tailPhase: 0,
+      exitTimer: 0,
+      exiting: false,
+      exitX: startX,
+      exitZ: startZ,
+    }
+  }, 2200) // カットイン演出の長さ
+}
+
+function updateShark(dt, elapsed) {
+  // 一定確率でサメ出現
+  if (!shark) {
+    const hotFishes = fishes.filter(f => f.type === 'hot' && !f.eaten)
+    if (hotFishes.length > 0 && Math.random() < 0.002) { // 約毎秒0.12回の確率
+      spawnShark()
+    }
+    return
+  }
+
+  const s = shark
+
+  // 尾びれアニメーション
+  s.tailPhase += dt * 6
+  const tail = s.mesh.getObjectByName('sharkTail')
+  if (tail) tail.rotation.y = Math.sin(s.tailPhase) * 0.5
+
+  // --- 退場中 ---
+  if (s.exiting) {
+    const dx = s.exitX - s.mesh.position.x
+    const dz = s.exitZ - s.mesh.position.z
+    const dist = Math.sqrt(dx * dx + dz * dz)
+    if (dist > 0.1) {
+      const spd = s.speed * 1.5 * dt
+      s.mesh.position.x += (dx / dist) * spd
+      s.mesh.position.z += (dz / dist) * spd
+      s.mesh.rotation.y = Math.atan2(dx, dz)
+    } else {
+      // 退場完了
+      scene.remove(s.mesh)
+      if (s.speech) {
+        scene.remove(s.speech)
+        s.speech.material.dispose()
+        s.speech.material.map.dispose()
+      }
+      shark = null
+      return
+    }
+    // 吹き出し更新
+    updateSharkSpeech(dt)
+    return
+  }
+
+  // --- ターゲット選択 ---
+  const hotFishes = fishes.filter(f => f.type === 'hot' && !f.eaten)
+  if (hotFishes.length === 0) {
+    // 赤い魚がいなくなった → 退場
+    s.exiting = true
+    return
+  }
+
+  if (!s.targetFish || s.targetFish.eaten) {
+    // 最も近い赤い魚をターゲット
+    let closest = null
+    let closestDist = Infinity
+    for (const f of hotFishes) {
+      const dx = f.mesh.position.x - s.mesh.position.x
+      const dz = f.mesh.position.z - s.mesh.position.z
+      const d = dx * dx + dz * dz
+      if (d < closestDist) { closestDist = d; closest = f }
+    }
+    s.targetFish = closest
+  }
+
+  // --- 追跡 ---
+  if (s.targetFish) {
+    const tx = s.targetFish.mesh.position.x
+    const ty = s.targetFish.mesh.position.y
+    const tz = s.targetFish.mesh.position.z
+    const dx = tx - s.mesh.position.x
+    const dy = ty - s.mesh.position.y
+    const dz = tz - s.mesh.position.z
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    if (dist < 1.5) {
+      // 食べる！
+      s.targetFish.eaten = true
+      scene.remove(s.targetFish.mesh)
+      // 吹き出しも消す
+      if (s.targetFish.speech) {
+        scene.remove(s.targetFish.speech)
+        s.targetFish.speech.material.dispose()
+        s.targetFish.speech.material.map.dispose()
+        s.targetFish.speech = null
+      }
+      showSharkSpeech('まじサメるわ〜')
+      s.targetFish = null
+    } else {
+      const spd = s.speed * dt
+      s.mesh.position.x += (dx / dist) * spd
+      s.mesh.position.y += (dy / dist) * spd * 0.3
+      s.mesh.position.z += (dz / dist) * spd
+      s.mesh.rotation.y = Math.atan2(dx, dz)
+    }
+  }
+
+  // 吹き出し更新
+  updateSharkSpeech(dt)
+}
+
+function showSharkSpeech(text) {
+  if (!shark) return
+  if (shark.speech) {
+    scene.remove(shark.speech)
+    shark.speech.material.dispose()
+    shark.speech.material.map.dispose()
+  }
+  const sprite = createSpeechBubble(text, 'shark')
+  sprite.position.set(
+    shark.mesh.position.x,
+    shark.mesh.position.y + 1.8,
+    shark.mesh.position.z
+  )
+  scene.add(sprite)
+  shark.speech = sprite
+  shark.speechTimer = 2.5
+}
+
+function updateSharkSpeech(dt) {
+  if (!shark || shark.speechTimer <= 0) return
+  shark.speechTimer -= dt
+  if (shark.speech) {
+    shark.speech.position.set(
+      shark.mesh.position.x,
+      shark.mesh.position.y + 2.0,
+      shark.mesh.position.z
+    )
+    animateSpeechPop(shark.speech, dt)
+    if (shark.speechTimer < 0.5) {
+      shark.speech.material.opacity = shark.speechTimer / 0.5
+    }
+  }
+  if (shark.speechTimer <= 0 && shark.speech) {
+    scene.remove(shark.speech)
+    shark.speech.material.dispose()
+    shark.speech.material.map.dispose()
+    shark.speech = null
+  }
 }
 
 // --- 地形生成 ---
@@ -1067,15 +1641,6 @@ function createTerrain() {
     emissive: 0x0a0a0a,
     flatShading: true,
   })
-  onMounted(() => {
-  loadWinds(); // ← ここに追記！
-  loadPosts()
-  initThree()
-  animate()
-  checkApiStatus()
-  checkXRSupport()
-  window.addEventListener('resize', onResize)
-})
 
   for (const c of corners) {
     const geo = new THREE.DodecahedronGeometry(3 + Math.random() * 2, 1)
@@ -1196,9 +1761,10 @@ function addStoneMesh(p, startY = 0) {
   }
   stoneGeo.computeVertexNormals()
 
+  const heatInit = Math.min((parseFloat(p.heat) || 0) / 100, 1)
   const stoneMat = new THREE.MeshPhongMaterial({
-    color: 0x888888,
-    emissive: color.clone().multiplyScalar(p.heat > 30 ? 0.25 : 0.03),
+    color: new THREE.Color(0.45 + heatInit * 0.55, 0.45 * (1 - heatInit * 0.6), 0.45 * (1 - heatInit * 0.7)),
+    emissive: new THREE.Color(heatInit * 0.4, heatInit * 0.05, 0),
     specular: 0x333333,
     shininess: 15,
     transparent: true,
@@ -1248,19 +1814,26 @@ function addStoneMesh(p, startY = 0) {
 function createTextSprite(text, color) {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
-  canvas.width = 512
-  canvas.height = 64
+  canvas.width = 640
+  canvas.height = 80
 
   // 背景
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
-  ctx.roundRect(0, 0, canvas.width, canvas.height, 8)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+  ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 12)
   ctx.fill()
+  ctx.strokeStyle = `rgba(${Math.round(color.r*255)}, ${Math.round(color.g*255)}, ${Math.round(color.b*255)}, 0.5)`
+  ctx.lineWidth = 2
+  ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 12)
+  ctx.stroke()
 
-  // テキスト
-  ctx.fillStyle = '#ffffff'
-  ctx.font = 'bold 28px sans-serif'
+  // テキスト（黒縁取り付き）
+  ctx.font = 'bold 36px sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
+  ctx.lineWidth = 6
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)'
+  ctx.strokeText(text, canvas.width / 2, canvas.height / 2)
+  ctx.fillStyle = '#ffffff'
   ctx.fillText(text, canvas.width / 2, canvas.height / 2)
 
   const texture = new THREE.CanvasTexture(canvas)
@@ -1271,7 +1844,7 @@ function createTextSprite(text, color) {
     depthTest: false,
   })
   const sprite = new THREE.Sprite(mat)
-  sprite.scale.set(4, 0.5, 1)
+  sprite.scale.set(5.5, 0.7, 1)
   sprite.renderOrder = 2
   return sprite
 }
@@ -1380,6 +1953,58 @@ function updateSplashes(dt) {
   for (let i = 0; i < 300; i++) {
     if (i < splashData.length) {
       positions.setXYZ(i, splashData[i].x, splashData[i].y, splashData[i].z)
+    } else {
+      positions.setXYZ(i, 0, -100, 0)
+    }
+  }
+  positions.needsUpdate = true
+}
+
+// --- 泡（熱い石からぶくぶく） ---
+function spawnBubbles(dt) {
+  const HEAT_THRESHOLD = 30
+  for (const s of stoneMeshes) {
+    if (!s.post || s.sinking) continue
+    const heat = parseFloat(s.post.heat) || 0
+    if (heat < HEAT_THRESHOLD) continue
+    // 熱量に応じて泡の発生頻度を調整
+    const intensity = Math.min((heat - HEAT_THRESHOLD) / 70, 1) // 0〜1
+    if (Math.random() > intensity * 0.3) continue // 毎フレーム確率で発生
+    const pos = s.group.position
+    if (pos.y > 0) continue // 水面より上なら出さない
+    const spread = s.size * 2.0
+    bubbleData.push({
+      x: pos.x + (Math.random() - 0.5) * spread,
+      y: pos.y + (Math.random() - 0.3) * s.size * 0.9,
+      z: pos.z + (Math.random() - 0.5) * spread,
+      vy: 1.5 + Math.random() * 2.0,
+      vx: (Math.random() - 0.5) * 0.3,
+      vz: (Math.random() - 0.5) * 0.3,
+      life: 8,
+    })
+  }
+  // 上限を超えたら古いものから削除
+  while (bubbleData.length > 200) bubbleData.shift()
+}
+
+function updateBubbles(dt) {
+  spawnBubbles(dt)
+  for (let i = bubbleData.length - 1; i >= 0; i--) {
+    const b = bubbleData[i]
+    b.x += b.vx * dt
+    b.y += b.vy * dt
+    b.z += b.vz * dt
+    b.vx += (Math.random() - 0.5) * 0.5 * dt // ゆらゆら
+    b.vz += (Math.random() - 0.5) * 0.5 * dt
+    b.life -= dt * 0.1
+    if (b.life <= 0 || b.y > 0.3) {
+      bubbleData.splice(i, 1)
+    }
+  }
+  const positions = bubbleParticles.geometry.attributes.position
+  for (let i = 0; i < 200; i++) {
+    if (i < bubbleData.length) {
+      positions.setXYZ(i, bubbleData[i].x, bubbleData[i].y, bubbleData[i].z)
     } else {
       positions.setXYZ(i, 0, -100, 0)
     }
@@ -1681,7 +2306,10 @@ function animate() {
   updateWater(elapsed)
   updateRipples(dt)
   updateSplashes(dt)
+  updateBubbles(dt)
   updateWaterColumns(dt)
+  try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
+  try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
   updateStones(elapsed, dt)
   updateFlyingStone(dt)
 
@@ -1689,7 +2317,7 @@ function animate() {
   decayTimer += dt
   if (decayTimer > 2) {
     decayTimer = 0
-    decayHeat()
+    try { decayHeat() } catch (e) { console.error('decayHeat error:', e) }
   }
 
   controls.update()
@@ -1709,6 +2337,7 @@ function onResize() {
 // --- ライフサイクル ---
 onMounted(async () => {
   await loadPosts()
+  loadWinds()
   initThree()
   animate()
   checkApiStatus()
@@ -1934,11 +2563,14 @@ function xrAnimateLoop(timestamp, frame) {
   updateWater(elapsed)
   updateRipples(dt)
   updateSplashes(dt)
+  updateBubbles(dt)
   updateWaterColumns(dt)
+  try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
+  try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
   updateStones(elapsed, dt)
   updateFlyingStone(dt)
   decayTimer += dt
-  if (decayTimer > 2) { decayTimer = 0; decayHeat() }
+  if (decayTimer > 2) { decayTimer = 0; try { decayHeat() } catch (e) { console.error('decayHeat error:', e) } }
 
   // コントローラー処理（掴んで投げる方式）
   // 最初に見つけたgripSpace付きコントローラーだけ処理（2本混在防止）
@@ -2724,6 +3356,117 @@ textarea::placeholder {
   10% { opacity: 1; }
   90% { opacity: 1; }
   100% { transform: translateX(-120vw); opacity: 0; }
+}
+
+/* --- サメカットイン演出 --- */
+.shark-cutin-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  z-index: 9999;
+  pointer-events: none;
+}
+.cutin-bar {
+  position: absolute;
+  left: 0; width: 100%;
+  height: 0;
+  background: #000;
+  animation: cutin-bar-in 0.3s ease-out forwards;
+}
+.cutin-bar-top { top: 0; }
+.cutin-bar-bottom { bottom: 0; }
+@keyframes cutin-bar-in {
+  0% { height: 0; }
+  100% { height: 18vh; }
+}
+.cutin-center {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%; height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cutin-flash {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(255, 255, 255, 0.9);
+  animation: cutin-flash-anim 0.4s ease-out forwards;
+}
+@keyframes cutin-flash-anim {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.cutin-shark {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: linear-gradient(90deg, transparent 0%, rgba(20, 30, 60, 0.95) 15%, rgba(20, 30, 60, 0.95) 85%, transparent 100%);
+  padding: 20px 80px;
+  animation: cutin-shark-slide 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+  transform: translateX(120vw);
+}
+@keyframes cutin-shark-slide {
+  0% { transform: translateX(120vw) skewX(-8deg); }
+  60% { transform: translateX(-5vw) skewX(-3deg); }
+  80% { transform: translateX(2vw) skewX(0deg); }
+  100% { transform: translateX(0) skewX(0deg); }
+}
+.cutin-shark-emoji {
+  font-size: 80px;
+  filter: drop-shadow(0 0 20px rgba(100, 160, 255, 0.6));
+  animation: cutin-shark-shake 0.1s ease-in-out 0.5s 6 alternate;
+}
+@keyframes cutin-shark-shake {
+  0% { transform: translateX(-3px) rotate(-2deg); }
+  100% { transform: translateX(3px) rotate(2deg); }
+}
+.cutin-shark-text {
+  font-size: 48px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 12px;
+  text-shadow:
+    0 0 10px rgba(100, 160, 255, 0.8),
+    0 0 30px rgba(100, 160, 255, 0.4),
+    2px 2px 0 #0a1628;
+  animation: cutin-text-glow 0.3s ease-in-out 0.5s 4 alternate;
+}
+@keyframes cutin-text-glow {
+  0% { text-shadow: 0 0 10px rgba(100, 160, 255, 0.8), 0 0 30px rgba(100, 160, 255, 0.4), 2px 2px 0 #0a1628; }
+  100% { text-shadow: 0 0 20px rgba(255, 100, 100, 1), 0 0 60px rgba(255, 100, 100, 0.6), 2px 2px 0 #0a1628; }
+}
+.cutin-line {
+  position: absolute;
+  top: 50%;
+  height: 3px;
+  width: 25vw;
+  transform: translateY(-50%);
+  animation: cutin-line-extend 0.4s ease-out 0.2s forwards;
+}
+.cutin-line-left {
+  right: 70%;
+  background: linear-gradient(90deg, transparent, rgba(100, 160, 255, 0.8));
+  transform-origin: right;
+}
+.cutin-line-right {
+  left: 70%;
+  background: linear-gradient(90deg, rgba(100, 160, 255, 0.8), transparent);
+  transform-origin: left;
+}
+@keyframes cutin-line-extend {
+  0% { width: 0; opacity: 0; }
+  100% { width: 25vw; opacity: 1; }
+}
+/* カットイン退場 */
+.cutin-leave-active {
+  transition: opacity 0.4s ease;
+}
+.cutin-leave-to {
+  opacity: 0;
 }
 
 </style>
