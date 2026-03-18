@@ -326,10 +326,10 @@ async function seedDemoData() {
       const existingIds = new Set(posts.value.map(p => p.id))
       // データ再読み込み
       await loadPosts()
-      // 新しく追加された投稿だけ3Dシーンに石を追加（水面から落下）
+      // 新しく追加された投稿だけ3Dシーンに石を追加（上空から落下で波紋を起こす）
       posts.value.forEach(p => {
         if (!existingIds.has(p.id)) {
-          addStoneMesh(p)
+          addStoneMesh(p, 5)
         }
       })
       await loadWinds()
@@ -350,7 +350,10 @@ async function resetAllData() {
   try {
     const res = await fetch(`${logicApiUrl}/reset-data`, { method: 'POST' })
     if (res.ok) {
-      stoneMeshes.forEach(m => scene.remove(m))
+      stoneMeshes.forEach(s => {
+        scene.remove(s.group)
+        if (s.body) physicsWorld.removeBody(s.body)
+      })
       stoneMeshes.length = 0
       posts.value = []
       winds.value = []
