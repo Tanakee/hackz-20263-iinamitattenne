@@ -125,6 +125,94 @@ POST /api/calculate-mass
 - **最小長**: 3文字以上（空白のみは除外）
 - **最大長**: 制限なし
 
+---
+
+### Logic API - 投稿 / 熱量 / 風化エンドポイント
+
+#### 1. 投稿一覧取得
+```
+GET /posts
+```
+
+**レスポンス (200 OK)**
+```json
+[
+  {
+    "id": 1,
+    "text": "投稿内容",
+    "x": 0.12,
+    "y": -0.34,
+    "mass": 12.3,
+    "heat": 45,
+    "weathered": false,
+    "created_at": "2026-03-18 00:00:00"
+  }
+]
+```
+
+#### 2. 投稿作成
+```
+POST /posts
+```
+
+**リクエスト例**
+```json
+{
+  "text": "意見を書きます",
+  "x": 0.1,
+  "y": -0.2,
+  "mass": 12.3
+}
+```
+
+**レスポンス (201 Created)**
+```json
+{
+  "success": true,
+  "post": {
+    "id": 2,
+    "text": "意見を書きます",
+    "x": 0.1,
+    "y": -0.2,
+    "mass": 12.3,
+    "heat": 0,
+    "weathered": false,
+    "created_at": "2026-03-18 00:00:00"
+  },
+  "message": "Post created successfully"
+}
+```
+
+#### 3. 熱量計算
+```
+POST /heat
+```
+
+**リクエスト例**
+```json
+{ "post_id": 1 }
+```
+
+**レスポンス (200 OK)**
+```json
+{ "heat": 42, "message": "熱量を計算しました" }
+```
+
+#### 4. 風化判定
+```
+POST /weathering
+```
+
+**リクエスト例**
+```json
+{ "post_id": 1, "created_at": "2026-03-18 00:00:00" }
+```
+
+**レスポンス (200 OK)**
+```json
+{ "weathered": true }
+```
+
 ## �📁 ディレクトリ構成
 
 ```

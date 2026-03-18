@@ -245,6 +245,31 @@ const isFlying = ref(false)
 // --- 投稿データ管理 ---
 const posts = ref([])
 
+// APIから投稿一覧を取得
+async function loadPosts() {
+  try {
+    const res = await fetch(`${logicApiUrl}/posts`)
+    if (res.ok) {
+      const postsData = await res.json()
+      posts.value = postsData.map(post => ({
+        ...post,
+        likes: post.likes || 0, // likesがなければ0
+        scale: post.scale || 30, // scaleがなければ30
+        z: post.y, // yをzとして使用（3D座標）
+        weathered: post.weathered ? 1.0 : 0.0 // booleanを数値に変換
+      }))
+      apiStatus.value = '接続済み'
+    } else {
+      throw new Error('投稿一覧取得に失敗しました')
+    }
+  } catch (error) {
+    console.error('投稿一覧取得エラー:', error)
+    apiStatus.value = '接続エラー'
+    // エラー時はモックデータを表示
+    loadMockPosts()
+  }
+}
+
 function loadMockPosts() {
   posts.value = [
     { id: 1, text: 'SNSの即時性は本当に必要なのか？', x: -0.4, z: -0.3, mass: 65, heat: 40, likes: 12, weathered: 0.0, scale: 60 },
@@ -260,14 +285,40 @@ const sortedPosts = computed(() => {
 })
 
 // いいね
-function likePost(post) {
-  post.likes = (post.likes || 0) + 1
-  post.heat = Math.min(100, post.heat + 10)
-  playLikeSound()
-  // 3Dメッシュの見た目を更新
-  const entry = stoneMeshes.find(s => s.post.id === post.id)
-  if (entry) {
-    updateStoneMeshAppearance(entry)
+async function likePost(post) {
+  try {
+    // Logic APIで熱量計算
+    const heatRes = await fetch(`${logicApiUrl}/heat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ post_id: post.id })
+    })
+
+    if (heatRes.ok) {
+      const heatData = await heatRes.json()
+      post.heat = Math.min(100, heatData.heat)
+    } else {
+      // APIエラー時はローカルで増やす
+      post.heat = Math.min(100, post.heat + 10)
+    }
+
+    post.likes = (post.likes || 0) + 1
+    playLikeSound()
+    // 3Dメッシュの見た目を更新
+    const entry = stoneMeshes.find(s => s.post.id === post.id)
+    if (entry) {
+      updateStoneMeshAppearance(entry)
+    }
+  } catch (error) {
+    console.error('いいねエラー:', error)
+    // エラー時はローカルで増やす
+    post.likes = (post.likes || 0) + 1
+    post.heat = Math.min(100, post.heat + 10)
+    playLikeSound()
+    const entry = stoneMeshes.find(s => s.post.id === post.id)
+    if (entry) {
+      updateStoneMeshAppearance(entry)
+    }
   }
 }
 
@@ -283,13 +334,34 @@ function updateStoneMeshAppearance(entry) {
 }
 
 // 熱量の自然減衰 + 石の消滅
-function decayHeat() {
+async function decayHeat() {
   for (let i = posts.value.length - 1; i >= 0; i--) {
     const p = posts.value[i]
     // 主語デカい → ゆっくり沈む（scale 100 → 0.33倍速、scale 0 → 1倍速）
     const scaleFactor = 1 - (p.scale ?? 30) / 150
     p.heat = Math.max(0, p.heat - 0.5 * scaleFactor)
-    p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
+
+    // 風化チェック（定期的にAPI呼び出し）
+    if (Math.random() < 0.1) { // 10%の確率でチェック
+      try {
+        const weatherRes = await fetch(`${logicApiUrl}/weathering`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ post_id: p.id, created_at: p.created_at })
+        })
+        if (weatherRes.ok) {
+          const weatherData = await weatherRes.json()
+          p.weathered = weatherData.weathered ? 1.0 : 0.0
+        }
+      } catch (error) {
+        console.warn('風化チェックエラー:', error)
+        // エラー時はローカルで増やす
+        p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
+      }
+    } else {
+      // APIチェックなし時はローカルで増やす
+      p.weathered = Math.min(1, p.weathered + 0.002 * scaleFactor)
+    }
 
     // 熱量ゼロ → 沈没・消滅
     if (p.heat <= 0 && p.weathered >= 0.8) {
@@ -1444,7 +1516,7 @@ function onResize() {
 
 // --- ライフサイクル ---
 onMounted(() => {
-  loadMockPosts()
+  loadPosts()
   initThree()
   animate()
   checkApiStatus()
@@ -1459,6 +1531,10 @@ onUnmounted(() => {
 })
 
 // --- 投稿 ---
+// --- 投稿 ---
+// Logic APIのURL
+const logicApiUrl = import.meta.env.VITE_API_LOGIC_URL || 'http://localhost:8000'
+
 const submitPost = async () => {
   if (!postText.value.trim() || postText.value.length > 500) return
   isSubmitting.value = true
@@ -1524,6 +1600,7 @@ const submitPost = async () => {
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
+    alert('投稿送信中にエラーが発生しました')
   } finally {
     isSubmitting.value = false
   }
