@@ -12,19 +12,71 @@
         }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #0a1628;
             min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
         }
         #app {
             width: 100%;
             height: 100vh;
         }
+        /* JS読み込み前のローディング画面 */
+        #initial-loading {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 99999;
+            background: #0a1628;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: white;
+            transition: opacity 0.6s ease;
+        }
+        #initial-loading.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #initial-loading h1 {
+            font-size: 2rem;
+            margin: 20px 0 8px;
+            background: linear-gradient(90deg, #88bbff, #aaddff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        #initial-loading p {
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 24px;
+        }
+        .init-ripple {
+            position: relative;
+            width: 80px;
+            height: 80px;
+        }
+        .init-ripple span {
+            position: absolute;
+            border: 2px solid #4488ff;
+            border-radius: 50%;
+            animation: init-ripple 1.5s ease-out infinite;
+            opacity: 0;
+        }
+        .init-ripple span:nth-child(1) { animation-delay: 0s; }
+        .init-ripple span:nth-child(2) { animation-delay: 0.5s; }
+        .init-ripple span:nth-child(3) { animation-delay: 1s; }
+        @keyframes init-ripple {
+            0% { top: 36px; left: 36px; width: 8px; height: 8px; opacity: 0.8; }
+            100% { top: 0; left: 0; width: 80px; height: 80px; opacity: 0; }
+        }
     </style>
 </head>
 <body>
+    <div id="initial-loading">
+        <div class="init-ripple">
+            <span></span><span></span><span></span>
+        </div>
+        <h1>いい波立ってんね～</h1>
+        <p>読み込み中...</p>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
 </body>

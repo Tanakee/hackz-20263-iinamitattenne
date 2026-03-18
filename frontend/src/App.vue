@@ -1,4 +1,20 @@
 <template>
+  <!-- ローディング画面 -->
+  <Transition name="loading-fade">
+    <div v-if="isLoading" class="loading-screen">
+      <div class="loading-content">
+        <div class="loading-ripple">
+          <div></div><div></div><div></div>
+        </div>
+        <h1 class="loading-title">いい波立ってんね～</h1>
+        <p class="loading-sub">{{ loadingMessage }}</p>
+        <div class="loading-bar">
+          <div class="loading-bar-fill" :style="{ width: loadingProgress + '%' }"></div>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
   <div class="container">
     <div class="main-content">
       <div ref="threeContainer" class="three-canvas" @click="handleClick"></div>
@@ -134,6 +150,10 @@ function sendRemoteExit() {
   }).catch(() => {})
 }
 
+const isLoading = ref(true)
+const loadingProgress = ref(0)
+const loadingMessage = ref('準備中...')
+
 const threeContainer = ref(null)
 const postText = ref('')
 const apiStatus = ref('確認中...')
@@ -150,6 +170,10 @@ const showList = ref(false)
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
 let waterMesh, waterGeo
+
+// --- 天体・時間同期 ---
+let sunMesh, moonMesh, sunLight, moonLight, ambientLight
+let skyDome
 
 // --- 物理演算 (cannon-es) ---
 let physicsWorld
@@ -623,6 +647,159 @@ function vrPhonePress(btnIdx) {
     postText.value = ''
   }
   updateVRPhoneScreen()
+  updateWaitingStone()
+}
+
+function createWaitingStoneMesh() {
+  const stoneGeo = new THREE.SphereGeometry(0.06, 8, 6)
+  const verts = stoneGeo.attributes.position
+  for (let i = 0; i < verts.count; i++) {
+    verts.setY(i, verts.getY(i) * 0.5)
+    const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
+    verts.setX(i, verts.getX(i) * n)
+    verts.setZ(i, verts.getZ(i) * n)
+  }
+  stoneGeo.computeVertexNormals()
+
+  const stoneMat = new THREE.MeshBasicMaterial({ color: 0x66bbff })
+  const mesh = new THREE.Mesh(stoneGeo, stoneMat)
+
+  // グロー
+  const glowGeo = new THREE.SphereGeometry(0.1, 12, 8)
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x4488ff, transparent: true, opacity: 0.25,
+  })
+  const glow = new THREE.Mesh(glowGeo, glowMat)
+  glow.name = 'glow'
+  mesh.add(glow)
+
+  return mesh
+}
+
+function updateWaitingStone() {
+  const hasText = postText.value.trim().length > 0
+  if (hasText && !xrWaitingStone && !xrGrabbing && !isFlying.value) {
+    // テキストがある → 目の前に待機石を出現
+    xrWaitingStone = createWaitingStoneMesh()
+    // プレイヤーの正面（橋の前方）に配置
+    xrWaitingStone.position.set(0, BRIDGE_Y + 1.3, BRIDGE_Z - 0.8)
+    scene.add(xrWaitingStone)
+  } else if (!hasText && xrWaitingStone) {
+    // テキストが空 → 待機石を消す
+    scene.remove(xrWaitingStone)
+    xrWaitingStone = null
+  }
+}
+
+function updateSkyAndLighting() {
+  const now = new Date()
+  const hours = now.getHours() + now.getMinutes() / 60
+
+  // 太陽の角度: 6時=地平線(0°), 12時=天頂(90°), 18時=地平線(180°)
+  // 24時間を360度に: (hours - 6) / 24 * 2π
+  const sunAngle = ((hours - 6) / 24) * Math.PI * 2
+  const orbitR = 60
+  const sunX = Math.cos(sunAngle) * orbitR
+  const sunY = Math.sin(sunAngle) * orbitR
+  const sunZ = -10
+
+  if (sunMesh) {
+    sunMesh.position.set(sunX, sunY, sunZ)
+    sunMesh.visible = sunY > -5
+  }
+  if (sunLight) {
+    sunLight.position.set(sunX, sunY, sunZ)
+  }
+
+  // 月は太陽の反対側
+  if (moonMesh) {
+    moonMesh.position.set(-sunX, -sunY, sunZ + 5)
+    moonMesh.visible = -sunY > -5
+  }
+  if (moonLight) {
+    moonLight.position.set(-sunX, -sunY, sunZ + 5)
+  }
+
+  // 太陽の高さに応じて色と明るさを変える
+  const sunHeight = Math.sin(sunAngle) // -1 ~ 1
+  const isDay = sunHeight > 0
+  const sunNorm = Math.max(0, sunHeight) // 0 ~ 1 (昼のみ)
+  const twilight = Math.max(0, Math.min(1, (sunHeight + 0.15) / 0.3)) // 薄明
+
+  // 太陽光の色と強さ
+  if (sunLight) {
+    if (sunHeight > 0.2) {
+      // 昼 → 白い太陽光
+      sunLight.color.setHex(0xffeedd)
+      sunLight.intensity = 1.2 + sunNorm * 0.5
+    } else if (sunHeight > -0.05) {
+      // 朝焼け/夕焼け → オレンジ
+      sunLight.color.setHex(0xff8844)
+      sunLight.intensity = 0.8
+    } else {
+      sunLight.intensity = 0
+    }
+  }
+
+  // 月光
+  if (moonLight) {
+    moonLight.intensity = isDay ? 0 : 0.3 + (1 - twilight) * 0.3
+  }
+
+  // 環境光
+  if (ambientLight) {
+    if (isDay) {
+      ambientLight.color.setHex(0x667788)
+      ambientLight.intensity = 0.4 + sunNorm * 0.4
+    } else {
+      ambientLight.color.setHex(0x223344)
+      ambientLight.intensity = 0.3
+    }
+  }
+
+  // 空の色
+  if (skyDome) {
+    let skyColor
+    if (sunHeight > 0.3) {
+      // 昼 → 青空
+      skyColor = new THREE.Color(0x4488cc)
+    } else if (sunHeight > 0.05) {
+      // 朝/夕 → グラデーション
+      skyColor = new THREE.Color(0x4488cc).lerp(new THREE.Color(0xff6633), 1 - (sunHeight - 0.05) / 0.25)
+    } else if (sunHeight > -0.1) {
+      // 薄明 → 暗いオレンジ→紺
+      skyColor = new THREE.Color(0xff6633).lerp(new THREE.Color(0x0a1628), (-sunHeight + 0.05) / 0.15)
+    } else {
+      // 夜
+      skyColor = new THREE.Color(0x0a1628)
+    }
+    skyDome.material.color.copy(skyColor)
+  }
+
+  // フォグ色も連動
+  if (scene && scene.fog) {
+    if (sunHeight > 0.2) {
+      scene.fog.color.setHex(0x88aacc)
+    } else if (sunHeight > 0) {
+      scene.fog.color.setHex(0x664433)
+    } else {
+      scene.fog.color.setHex(0x0a1628)
+    }
+  }
+
+  // 水面の色も連動
+  if (waterMesh && waterMesh.material) {
+    if (sunHeight > 0.2) {
+      waterMesh.material.color.setHex(0x2266aa)
+      waterMesh.material.emissive.setHex(0x112244)
+    } else if (sunHeight > 0) {
+      waterMesh.material.color.setHex(0x1a4a8a)
+      waterMesh.material.emissive.setHex(0x1a2a3a)
+    } else {
+      waterMesh.material.color.setHex(0x1a4a8a)
+      waterMesh.material.emissive.setHex(0x0a1a3a)
+    }
+  }
 }
 
 function initThree() {
@@ -658,17 +835,36 @@ function initThree() {
   controls.maxDistance = 50
   controls.target.set(0, 0, 0)
 
-  // ライティング
-  const ambientLight = new THREE.AmbientLight(0x334466, 0.8)
-  scene.add(ambientLight)
+  // --- 天球 ---
+  const skyGeo = new THREE.SphereGeometry(90, 32, 16)
+  const skyMat = new THREE.MeshBasicMaterial({ side: THREE.BackSide, color: 0x0a1628 })
+  skyDome = new THREE.Mesh(skyGeo, skyMat)
+  scene.add(skyDome)
 
-  const moonLight = new THREE.DirectionalLight(0xaaccff, 1.5)
-  moonLight.position.set(-10, 20, 10)
+  // --- 太陽 ---
+  const sunGeo = new THREE.SphereGeometry(2, 16, 16)
+  const sunMat = new THREE.MeshBasicMaterial({ color: 0xffdd44 })
+  sunMesh = new THREE.Mesh(sunGeo, sunMat)
+  scene.add(sunMesh)
+
+  sunLight = new THREE.DirectionalLight(0xffeedd, 1.5)
+  scene.add(sunLight)
+
+  // --- 月 ---
+  const moonGeo = new THREE.SphereGeometry(1.2, 16, 16)
+  const moonMat = new THREE.MeshBasicMaterial({ color: 0xddeeff })
+  moonMesh = new THREE.Mesh(moonGeo, moonMat)
+  scene.add(moonMesh)
+
+  moonLight = new THREE.DirectionalLight(0xaaccff, 0.4)
   scene.add(moonLight)
 
-  const warmLight = new THREE.PointLight(0xff8844, 0.6, 50)
-  warmLight.position.set(5, 8, -5)
-  scene.add(warmLight)
+  // --- 環境光 ---
+  ambientLight = new THREE.AmbientLight(0x334466, 0.5)
+  scene.add(ambientLight)
+
+  // 初回の天体更新
+  updateSkyAndLighting()
 
   // 橋（VR投石用）
   buildBridge()
@@ -1427,6 +1623,7 @@ function animate() {
     decayHeat()
   }
 
+  updateSkyAndLighting()
   controls.update()
   renderer.render(scene, camera)
 }
@@ -1442,12 +1639,38 @@ function onResize() {
 }
 
 // --- ライフサイクル ---
-onMounted(() => {
+onMounted(async () => {
+  loadingMessage.value = '投稿データを読み込み中...'
+  loadingProgress.value = 10
   loadMockPosts()
+
+  loadingMessage.value = '3Dシーンを構築中...'
+  loadingProgress.value = 30
+  await new Promise(r => setTimeout(r, 100))  // UIを更新させる
   initThree()
+
+  loadingMessage.value = 'アニメーションを開始...'
+  loadingProgress.value = 60
   animate()
-  checkApiStatus()
+
+  loadingMessage.value = 'APIに接続中...'
+  loadingProgress.value = 80
+  await checkApiStatus()
   checkXRSupport()
+
+  loadingMessage.value = '池に波紋を広げています...'
+  loadingProgress.value = 100
+  await new Promise(r => setTimeout(r, 400))
+
+  isLoading.value = false
+
+  // index.htmlのローディング画面をフェードアウトで消す
+  const initLoading = document.getElementById('initial-loading')
+  if (initLoading) {
+    initLoading.classList.add('fade-out')
+    setTimeout(() => initLoading.remove(), 600)
+  }
+
   window.addEventListener('resize', onResize)
 })
 
@@ -1517,6 +1740,7 @@ let xrPeakVelocity = new THREE.Vector3()
 let xrStoneMesh = null  // 手に持っている石のメッシュ
 let xrHandMesh = null   // 手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
+let xrWaitingStone = null  // テキスト入力後に目の前に浮かぶ待機石
 const VR_PHRASES = [
   'VRから一石！',
   '波紋を広げよ',
@@ -1606,6 +1830,7 @@ async function toggleXR() {
       }
       // 手持ち石・手モデルを消す
       if (xrStoneMesh) { scene.remove(xrStoneMesh); xrStoneMesh = null }
+      if (xrWaitingStone) { scene.remove(xrWaitingStone); xrWaitingStone = null }
       if (xrHandMesh) { scene.remove(xrHandMesh); xrHandMesh = null }
       if (vrPhoneMesh) { scene.remove(vrPhoneMesh); vrPhoneMesh = null; vrPhoneScreen = null }
       if (vrPhoneLaser) { scene.remove(vrPhoneLaser); vrPhoneLaser = null }
@@ -1694,45 +1919,32 @@ function xrAnimateLoop(timestamp, frame) {
       }
       xrTriggerWasPressed = triggerPressed
 
+      // --- 待機石の浮遊アニメーション ---
+      if (xrWaitingStone && !xrGrabbing) {
+        const floatY = BRIDGE_Y + 1.3 + Math.sin(elapsed * 2) * 0.05
+        xrWaitingStone.position.y = floatY
+        xrWaitingStone.rotation.y = elapsed * 0.5
+        const glow = xrWaitingStone.getObjectByName('glow')
+        if (glow) {
+          const pulse = 1 + Math.sin(elapsed * 4) * 0.3
+          glow.scale.set(pulse, pulse, pulse)
+        }
+      }
+
       // --- 石の掴み＆投げ（グリップ = buttons[1]） ---
       const gripValue = gamepad ? (gamepad.buttons[1]?.value ?? 0) : 0
       const gripPressed = gripValue > 0.5
 
-      if (gripPressed && !xrGrabbing && !isFlying.value && postText.value.trim()) {
-        // 掴み開始 → テキストがある時だけ手元に石を生成
+      if (gripPressed && !xrGrabbing && !isFlying.value && xrWaitingStone) {
+        // 待機石を掴む → 手に持ち替え
         xrGrabbing = true
         xrGrabFrames = 0
         xrPeakSpeed = 0
         xrPeakVelocity.set(0, 0, 0)
 
-        if (!xrStoneMesh) {
-          const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
-          const verts = stoneGeo.attributes.position
-          for (let i = 0; i < verts.count; i++) {
-            verts.setY(i, verts.getY(i) * 0.5)
-            const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
-            verts.setX(i, verts.getX(i) * n)
-            verts.setZ(i, verts.getZ(i) * n)
-          }
-          stoneGeo.computeVertexNormals()
-
-          // MeshBasicMaterialならライティング不要で確実に見える
-          const stoneMat = new THREE.MeshBasicMaterial({ color: 0x66bbff })
-          xrStoneMesh = new THREE.Mesh(stoneGeo, stoneMat)
-
-          // 光る球体（グロー）
-          const glowGeo = new THREE.SphereGeometry(0.08, 12, 8)
-          const glowMat = new THREE.MeshBasicMaterial({
-            color: 0x4488ff,
-            transparent: true,
-            opacity: 0.3,
-          })
-          const glow = new THREE.Mesh(glowGeo, glowMat)
-          glow.name = 'glow'
-          xrStoneMesh.add(glow)
-
-          scene.add(xrStoneMesh)
-        }
+        // 待機石をそのまま手持ち石に転用
+        xrStoneMesh = xrWaitingStone
+        xrWaitingStone = null
       } else if (gripPressed && xrGrabbing) {
         // 掴み中 → 石を手のワールド座標に追従
         xrGrabFrames++
@@ -1790,6 +2002,8 @@ function xrAnimateLoop(timestamp, frame) {
     }
   }
 
+  updateSkyAndLighting()
+
   // VR内スマホ画面を更新（テキスト変更時のみ）
   if (vrPhoneCtx && postText.value !== vrPhoneLastText) {
     updateVRPhoneScreen()
@@ -1826,6 +2040,78 @@ const checkApiStatus = async () => {
 </script>
 
 <style scoped>
+/* --- ローディング画面 --- */
+.loading-screen {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999;
+  background: #0a1628;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loading-content {
+  text-align: center;
+  color: white;
+}
+.loading-title {
+  font-size: 2rem;
+  margin: 20px 0 8px;
+  background: linear-gradient(90deg, #88bbff, #aaddff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.loading-sub {
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.5);
+  margin: 0 0 24px;
+  min-height: 1.2em;
+}
+.loading-bar {
+  width: 240px;
+  height: 4px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 2px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.loading-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4488ff, #88ccff);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+/* 波紋アニメーション */
+.loading-ripple {
+  display: inline-block;
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+.loading-ripple div {
+  position: absolute;
+  border: 2px solid #4488ff;
+  border-radius: 50%;
+  animation: loading-ripple-anim 1.5s ease-out infinite;
+  opacity: 0;
+}
+.loading-ripple div:nth-child(1) { animation-delay: 0s; }
+.loading-ripple div:nth-child(2) { animation-delay: 0.5s; }
+.loading-ripple div:nth-child(3) { animation-delay: 1s; }
+@keyframes loading-ripple-anim {
+  0% { top: 36px; left: 36px; width: 8px; height: 8px; opacity: 0.8; }
+  100% { top: 0; left: 0; width: 80px; height: 80px; opacity: 0; }
+}
+
+/* フェードアウト */
+.loading-fade-leave-active {
+  transition: opacity 0.6s ease;
+}
+.loading-fade-leave-to {
+  opacity: 0;
+}
+
 .container {
   width: 100%;
   height: 100vh;

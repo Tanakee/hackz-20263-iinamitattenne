@@ -20,5 +20,23 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/logic/, '')
       }
     }
+  },
+  // プレビューサーバー用（本番ビルド配信）
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+    https: true,
+    proxy: {
+      '/api/gravity': {
+        target: 'http://gravity-api:8080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/gravity/, '/api')
+      },
+      '/api/logic': {
+        target: 'http://logic-api:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/logic/, '')
+      }
+    }
   }
 })
