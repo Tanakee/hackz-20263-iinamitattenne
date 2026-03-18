@@ -1236,7 +1236,9 @@ function addStoneMesh(p, startY = 0) {
   })
   physicsWorld.addBody(body)
 
-  stoneMeshes.push({ group, post: p, body, size })
+  // startYが水面より上なら着水時に波紋を出すフラグを立てる
+  const needsRipple = startY > 0
+  stoneMeshes.push({ group, post: p, body, size, needsRipple })
 }
 
 function createTextSprite(text, color) {
@@ -1606,6 +1608,12 @@ function updateStones(elapsed, dt) {
       // 物理ボディの位置・回転をThree.jsメッシュに同期
       s.group.position.copy(s.body.position)
       s.group.quaternion.copy(s.body.quaternion)
+
+      // 水面(y=0)を通過したら波紋を発生
+      if (s.needsRipple && s.body.position.y <= 0) {
+        addRipple3D(s.body.position.x, s.body.position.z, s.post.mass, s.post.scale ?? 30)
+        s.needsRipple = false
+      }
     }
 
     // 風化視覚更新（脈動に elapsed を渡す）
