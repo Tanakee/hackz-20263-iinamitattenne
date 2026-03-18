@@ -106,6 +106,16 @@
             @click="toggleXR"
           >{{ xrActive ? 'VR終了' : 'VRで投げる' }}</button>
           <p v-if="xrActive" class="xr-hint">トリガーを握って振り、離すと投石</p>
+          <button
+            class="demo-seed-btn"
+            :disabled="isDemoSeeding"
+            @click="seedDemoData"
+          >{{ isDemoSeeding ? '投入中...' : 'デモデータ投入' }}</button>
+          <button
+            class="reset-data-btn"
+            :disabled="isResetting"
+            @click="resetAllData"
+          >{{ isResetting ? 'リセット中...' : 'データリセット' }}</button>
         </div>
       </div>
     </div>
@@ -159,6 +169,8 @@ const popupStyle = ref({})
 const showList = ref(false)
 
 const winds = ref([]);
+const isDemoSeeding = ref(false);
+const isResetting = ref(false);
 
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
@@ -268,7 +280,7 @@ async function loadPosts() {
         likes: post.likes || 0, // likesがなければ0
         scale: post.scale || 30, // scaleがなければ30
         z: post.y, // yをzとして使用（3D座標）
-        weathered: post.weathered ? 1.0 : 0.0 // booleanを数値に変換
+        weathered: parseFloat(post.weathered) || 0 // 風化度（0.0〜1.0）
       }))
       apiStatus.value = '接続済み'
     } else {
@@ -299,6 +311,57 @@ async function loadWinds() {
     }
   } catch (error) {
     console.error('風の取得に失敗しました:', error)
+  }
+}
+
+// デモデータ投入（既存データを残して追加）
+async function seedDemoData() {
+  if (isDemoSeeding.value) return
+  isDemoSeeding.value = true
+  try {
+    const res = await fetch(`${logicApiUrl}/demo-seed`, { method: 'POST' })
+    if (res.ok) {
+      const data = await res.json()
+      // 既存のIDセットを記録
+      const existingIds = new Set(posts.value.map(p => p.id))
+      // データ再読み込み
+      await loadPosts()
+      // 新しく追加された投稿だけ3Dシーンに石を追加
+      posts.value.forEach(p => {
+        if (!existingIds.has(p.id)) {
+          addStoneMesh(p)
+        }
+      })
+      await loadWinds()
+    } else {
+      console.error('デモデータ投入に失敗しました')
+    }
+  } catch (error) {
+    console.error('デモデータ投入エラー:', error)
+  } finally {
+    isDemoSeeding.value = false
+  }
+}
+
+// 全データリセット
+async function resetAllData() {
+  if (isResetting.value) return
+  isResetting.value = true
+  try {
+    const res = await fetch(`${logicApiUrl}/reset-data`, { method: 'POST' })
+    if (res.ok) {
+      stoneMeshes.forEach(m => scene.remove(m))
+      stoneMeshes.length = 0
+      posts.value = []
+      winds.value = []
+      selectedPost.value = null
+    } else {
+      console.error('データリセットに失敗しました')
+    }
+  } catch (error) {
+    console.error('データリセットエラー:', error)
+  } finally {
+    isResetting.value = false
   }
 }
 
@@ -2499,6 +2562,44 @@ textarea::placeholder {
   margin-top: 4px;
   font-size: 0.75rem;
   color: rgba(200, 184, 255, 0.7);
+}
+.demo-seed-btn {
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: rgba(255, 160, 50, 0.25);
+  border: 1px solid rgba(255, 160, 50, 0.5);
+  color: #ffd6a0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+  width: 100%;
+}
+.demo-seed-btn:hover {
+  background: rgba(255, 160, 50, 0.45);
+}
+.demo-seed-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.reset-data-btn {
+  margin-top: 6px;
+  padding: 6px 14px;
+  background: rgba(255, 70, 70, 0.2);
+  border: 1px solid rgba(255, 70, 70, 0.4);
+  color: #ffaaaa;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+  width: 100%;
+}
+.reset-data-btn:hover {
+  background: rgba(255, 70, 70, 0.4);
+}
+.reset-data-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* --- VRリモコン（スマホ用） --- */

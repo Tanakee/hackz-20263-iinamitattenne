@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS posts (
     y FLOAT,
     mass FLOAT,
     heat FLOAT DEFAULT 0,
-    weathered BOOLEAN DEFAULT FALSE,
+    weathered FLOAT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
