@@ -70,6 +70,12 @@ switch ($request_uri) {
         }
         break;
 
+    case '/hot-topics':
+        if ($request_method === 'GET') {
+            handleGetHotTopics();
+        }
+        break;
+
     default:
         http_response_code(404);
         echo json_encode(['error' => 'Endpoint not found']);
@@ -314,6 +320,36 @@ function handleHeatCalculation() {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode(['error' => 'Failed to calculate heat: ' . $e->getMessage()]);
+    }
+}
+
+function handleGetHotTopics() {
+    try {
+        $pdo = getDBConnection();
+        
+        // 閾値の取得（環境変数から、なければデフォルト100）
+        $threshold = (float)(getenv('HOT_TOPIC_THRESHOLD') ?: 100);
+
+        // 風化しておらず、熱量が閾値以上の投稿を取得（熱量の降順）
+        $stmt = $pdo->prepare("
+            SELECT id, text, x, y, mass, heat, created_at 
+            FROM posts 
+            WHERE weathered = FALSE AND heat > ? 
+            ORDER BY heat DESC
+        ");
+        $stmt->execute([$threshold]);
+        $hot_topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        http_response_code(200);
+        echo json_encode([
+            'threshold' => $threshold,
+            'count' => count($hot_topics),
+            'hot_topics' => $hot_topics
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to retrieve hot topics: ' . $e->getMessage()]);
     }
 }
 ?>
