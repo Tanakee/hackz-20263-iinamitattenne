@@ -742,6 +742,7 @@ function vrPhonePress(btnIdx) {
     const idx = VR_KB_MODE_ORDER.indexOf(vrKbMode)
     vrKbMode = VR_KB_MODE_ORDER[(idx + 1) % VR_KB_MODE_ORDER.length]
     buildVRKeyboardButtons()
+  }
   updateVRPhoneScreen()
 }
 
