@@ -1934,7 +1934,7 @@ function xrAnimateLoop(timestamp, frame) {
           xrStoneMesh = null
         }
 
-        if (xrGrabFrames >= 2 && xrPeakSpeed > 0.3) {
+        if (xrGrabFrames >= 3 && xrPeakSpeed > 1.2) {
           // 直近フレームの速度を平均して方向を安定化
           const avgVel = new THREE.Vector3()
           const hist = xrVelHistory
@@ -1962,8 +1962,8 @@ function xrAnimateLoop(timestamp, frame) {
             dirZ = -1
           }
 
-          // 速度に応じて飛距離が変わる（弱く→近く、強く→遠く）
-          const distance = THREE.MathUtils.lerp(2, WATER_SIZE * 0.45, Math.min(xrPeakSpeed / 3, 1))
+          // 速度に応じて飛距離が変わる（しっかり振らないと遠くに飛ばない）
+          const distance = THREE.MathUtils.lerp(2, WATER_SIZE * 0.45, Math.min((xrPeakSpeed - 1.0) / 4, 1))
 
           const halfW = WATER_SIZE * 0.45
           const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
