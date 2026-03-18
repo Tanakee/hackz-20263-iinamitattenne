@@ -1934,45 +1934,49 @@ function xrAnimateLoop(timestamp, frame) {
           xrStoneMesh = null
         }
 
-        if (xrGrabFrames >= 2 && xrPeakSpeed > 0.5) {
-          // 直近フレームの速度を平均して方向を安定化
-          const avgVel = new THREE.Vector3()
+        if (xrGrabFrames >= 2) {
+          // リリース直前の速度から方向と強さを計算
           const hist = xrVelHistory
+          const avgVel = new THREE.Vector3()
+          let avgSpeed = 0
           if (hist.length > 0) {
-            let totalWeight = 0
-            for (const v of hist) {
-              const w = v.length()
-              avgVel.addScaledVector(v, w)
-              totalWeight += w
+            // 直近フレームの単純平均（リリース時点の実速度）
+            for (const v of hist) avgVel.add(v)
+            avgVel.divideScalar(hist.length)
+            avgSpeed = avgVel.length()
+          }
+
+          // 最低速度に満たない場合は投げない（手ブレ防止）
+          if (avgSpeed > 0.3) {
+            // X成分を増幅して左右の投げを検出しやすくする
+            const LR_AMPLIFY = 2.0
+            const flatVel = new THREE.Vector2(avgVel.x * LR_AMPLIFY, avgVel.z)
+            const flatSpeed = flatVel.length()
+
+            let dirX, dirZ
+            if (flatSpeed > 0.05) {
+              dirX = flatVel.x / flatSpeed
+              dirZ = flatVel.y / flatSpeed
+            } else {
+              dirX = 0
+              dirZ = -1
             }
-            if (totalWeight > 0) avgVel.divideScalar(totalWeight)
+
+            // 指数カーブ: 弱い力→足元、遠くに飛ばすには指数的に力が必要
+            // e^(speed*k) 型のカーブ
+            const MIN_DIST = 0.3
+            const MAX_DIST = WATER_SIZE * 0.45
+            const POWER_SCALE = 1.5  // この値が大きいほど強い力が必要
+            const expPower = (Math.exp(avgSpeed * POWER_SCALE) - Math.exp(0)) /
+                             (Math.exp(5.0 * POWER_SCALE) - Math.exp(0))
+            const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * Math.min(expPower, 1)
+
+            const halfW = WATER_SIZE * 0.45
+            const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
+            const targetZ = THREE.MathUtils.clamp(dirZ * distance, -halfW, halfW)
+
+            xrSubmitPost(targetX, targetZ, releaseWorldPos)
           }
-          // X成分を増幅して左右の投げを検出しやすくする
-          const LR_AMPLIFY = 2.0
-          const flatVel = new THREE.Vector2(avgVel.x * LR_AMPLIFY, avgVel.z)
-          const flatSpeed = flatVel.length()
-
-          let dirX, dirZ
-          if (flatSpeed > 0.05) {
-            dirX = flatVel.x / flatSpeed
-            dirZ = flatVel.y / flatSpeed
-          } else {
-            dirX = 0
-            dirZ = -1
-          }
-
-          // 三乗カーブで飛距離を計算（弱い力→足元、かなり強く振らないと遠くに飛ばない）
-          // speed 0.5 → 足元、speed 5.0+ → 最大距離
-          const MIN_DIST = 0.3
-          const MAX_DIST = WATER_SIZE * 0.45
-          const normalizedPower = Math.min(xrPeakSpeed / 5.0, 1)
-          const distance = MIN_DIST + (MAX_DIST - MIN_DIST) * normalizedPower * normalizedPower * normalizedPower
-
-          const halfW = WATER_SIZE * 0.45
-          const targetX = THREE.MathUtils.clamp(dirX * distance, -halfW, halfW)
-          const targetZ = THREE.MathUtils.clamp(dirZ * distance, -halfW, halfW)
-
-          xrSubmitPost(targetX, targetZ, releaseWorldPos)
         }
       }
     }
