@@ -106,6 +106,11 @@
             @click="toggleXR"
           >{{ xrActive ? 'VR終了' : 'VRで投げる' }}</button>
           <p v-if="xrActive" class="xr-hint">トリガーを握って振り、離すと投石</p>
+          <button
+            class="demo-seed-btn"
+            :disabled="isDemoSeeding"
+            @click="seedDemoData"
+          >{{ isDemoSeeding ? '投入中...' : 'デモデータ投入' }}</button>
         </div>
       </div>
     </div>
@@ -159,6 +164,7 @@ const popupStyle = ref({})
 const showList = ref(false)
 
 const winds = ref([]);
+const isDemoSeeding = ref(false);
 
 // --- Three.js 変数 ---
 let scene, camera, renderer, clock, controls
@@ -299,6 +305,30 @@ async function loadWinds() {
     }
   } catch (error) {
     console.error('風の取得に失敗しました:', error)
+  }
+}
+
+// デモデータ投入
+async function seedDemoData() {
+  if (isDemoSeeding.value) return
+  isDemoSeeding.value = true
+  try {
+    const res = await fetch(`${logicApiUrl}/demo-seed`, { method: 'POST' })
+    if (res.ok) {
+      // 3Dシーンの既存石を削除
+      stoneMeshes.forEach(m => scene.remove(m))
+      stoneMeshes.length = 0
+      // データ再読み込み
+      await loadPosts()
+      posts.value.forEach(p => addStoneMesh(p))
+      await loadWinds()
+    } else {
+      console.error('デモデータ投入に失敗しました')
+    }
+  } catch (error) {
+    console.error('デモデータ投入エラー:', error)
+  } finally {
+    isDemoSeeding.value = false
   }
 }
 
@@ -2499,6 +2529,25 @@ textarea::placeholder {
   margin-top: 4px;
   font-size: 0.75rem;
   color: rgba(200, 184, 255, 0.7);
+}
+.demo-seed-btn {
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: rgba(255, 160, 50, 0.25);
+  border: 1px solid rgba(255, 160, 50, 0.5);
+  color: #ffd6a0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+  width: 100%;
+}
+.demo-seed-btn:hover {
+  background: rgba(255, 160, 50, 0.45);
+}
+.demo-seed-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* --- VRリモコン（スマホ用） --- */

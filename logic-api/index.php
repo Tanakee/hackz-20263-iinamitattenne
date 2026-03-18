@@ -88,6 +88,12 @@ switch ($request_uri) {
         }
         break;
 
+    case '/demo-seed':
+        if ($request_method === 'POST') {
+            handleDemoSeed();
+        }
+        break;
+
     default:
         http_response_code(404);
         echo json_encode_utf8(['error' => 'Endpoint not found']);
@@ -396,6 +402,63 @@ function handleGetWinds() {
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode_utf8(['error' => 'Failed to retrieve winds: ' . $e->getMessage()]);
+    }
+}
+
+// デモ用サンプルデータ投入
+function handleDemoSeed() {
+    try {
+        $pdo = getDBConnection();
+
+        // weatheredカラムをFLOATに変更
+        $pdo->exec("ALTER TABLE posts MODIFY COLUMN weathered FLOAT DEFAULT 0");
+
+        // 既存データをクリア
+        $pdo->exec("DELETE FROM interactions");
+        $pdo->exec("DELETE FROM winds");
+        $pdo->exec("DELETE FROM posts");
+        $pdo->exec("ALTER TABLE posts AUTO_INCREMENT = 1");
+        $pdo->exec("ALTER TABLE interactions AUTO_INCREMENT = 1");
+        $pdo->exec("ALTER TABLE winds AUTO_INCREMENT = 1");
+
+        // posts データ
+        $pdo->exec("INSERT INTO posts (text, x, y, mass, heat, weathered, created_at) VALUES
+            ('SNSは民主主義を壊しているのか？！',        -0.55,  0.10,  95.0, 78.0, 0.00, NOW()),
+            ('炎上は現代の焚き火である！！',              0.10, -0.40, 110.0, 65.0, 0.00, NOW()),
+            ('AIに仕事を奪われたくない！！！',            0.45,  0.30,  80.0, 42.0, 0.05, NOW()),
+            ('もっとゆっくり議論できる場所が欲しい',     -0.30,  0.45,  35.0, 12.0, 0.30, DATE_SUB(NOW(), INTERVAL 10 MINUTE)),
+            ('エコーチェンバーを壊すにはどうすれば',      0.60, -0.20,  50.0,  8.0, 0.45, DATE_SUB(NOW(), INTERVAL 20 MINUTE)),
+            ('匿名だから言えることもある',               -0.15, -0.55,  28.0,  5.0, 0.55, DATE_SUB(NOW(), INTERVAL 30 MINUTE)),
+            ('バズることに意味はあるのか',                0.25,  0.55,  40.0,  2.0, 0.82, DATE_SUB(NOW(), INTERVAL 60 MINUTE)),
+            ('誰も読まないコメントを書き続ける意味',     -0.50, -0.30,  22.0,  0.5, 0.91, DATE_SUB(NOW(), INTERVAL 90 MINUTE))
+        ");
+
+        // interactions データ
+        $pdo->exec("INSERT INTO interactions (post_id, type, value, created_at) VALUES
+            (1, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 5 MINUTE)),
+            (1, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 3 MINUTE)),
+            (1, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 1 MINUTE)),
+            (2, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 8 MINUTE)),
+            (2, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 4 MINUTE)),
+            (3, 'wave', 1.0, DATE_SUB(NOW(), INTERVAL 6 MINUTE))
+        ");
+
+        // winds データ
+        $pdo->exec("INSERT INTO winds (summary, post_ids, created_at) VALUES
+            ('SNSと民主主義、炎上とAI——現代社会への問いが池に渦巻いている。あなたはどう思う？', '[1,2,3]', DATE_SUB(NOW(), INTERVAL 2 MINUTE)),
+            ('静かな声も、やがて風化する。議論の場に熱を。', '[4,5,6]', DATE_SUB(NOW(), INTERVAL 15 MINUTE))
+        ");
+
+        http_response_code(200);
+        echo json_encode_utf8([
+            'success' => true,
+            'message' => 'デモデータを投入しました',
+            'counts' => ['posts' => 8, 'interactions' => 6, 'winds' => 2]
+        ]);
+
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode_utf8(['error' => 'デモデータ投入に失敗: ' . $e->getMessage()]);
     }
 }
 ?>
