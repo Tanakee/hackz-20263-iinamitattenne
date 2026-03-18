@@ -950,7 +950,7 @@ function initThree() {
   // 石同士の衝突
   physicsWorld.addContactMaterial(new CANNON.ContactMaterial(
     stoneMat, stoneMat,
-    { friction: 0.6, restitution: 0.05 }  // 反発をほぼゼロに
+    { friction: 0.9, restitution: 0.15 }  // 高摩擦・わずかに弾く
   ))
   // 物理マテリアルをグローバルに保持
   physicsWorld._stoneMat = stoneMat
@@ -1218,7 +1218,7 @@ function addStoneMesh(p, startY = 0) {
   scene.add(group)
 
   // 物理ボディ（扁平な球 → Sphereで近似）
-  const physicsRadius = size * 0.7  // 見た目より少し小さく（扁平分を考慮）
+  const physicsRadius = size * 0.95  // 見た目とほぼ同サイズでシビアに判定
   const physicsMass = 1 + (p.scale ?? 30) * 0.05  // scale大 → 重い
   const body = new CANNON.Body({
     mass: physicsMass,
@@ -1569,7 +1569,7 @@ function updateFlyingStone(dt) {
 function updateStones(elapsed, dt) {
   // 物理ワールドを進める
   if (physicsWorld) {
-    physicsWorld.step(1 / 60, dt, 3)
+    physicsWorld.step(1 / 60, dt, 5)
   }
 
   for (let i = stoneMeshes.length - 1; i >= 0; i--) {
