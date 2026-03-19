@@ -116,6 +116,11 @@
             :disabled="isResetting"
             @click="resetAllData"
           >{{ isResetting ? 'リセット中...' : 'データリセット' }}</button>
+          <button
+            class="shark-btn"
+            :disabled="!!shark"
+            @click="spawnShark()"
+          >サメ襲来</button>
         </div>
       </div>
 
@@ -627,7 +632,10 @@ let vrPhoneCtx = null
 let vrPhoneTexture = null
 let vrPhoneLastText = ''
 let vrPhoneHoverIdx = -1  // ホバー中のボタンindex
+let vrPhoneDebugMsg = ''  // デバッグ表示用
 let vrPhoneLaser = null    // レーザーポインター
+let vrPhoneGrabbing = false  // スマホを掴んでいるか
+let vrPhoneGrabOffset = new THREE.Vector3()  // 掴んだ時のオフセット
 const vrPhoneRaycaster = new THREE.Raycaster()
 
 // ひらがなキーボード配列
@@ -684,13 +692,18 @@ function buildVRKeyboardButtons() {
   VR_PHONE_BUTTONS.push({ x: 120, y: FUNC_Y, w: 50, h: 38, type: 'clear' })
   VR_PHONE_BUTTONS.push({ x: 174, y: FUNC_Y, w: 50, h: 38, type: 'mode' })
   VR_PHONE_BUTTONS.push({ x: 228, y: FUNC_Y, w: 88, h: 38, type: 'exit' })
+  // デモ用ボタン行
+  const DEMO_Y = FUNC_Y + 46
+  VR_PHONE_BUTTONS.push({ x: 4, y: DEMO_Y, w: 100, h: 38, type: 'demo-seed' })
+  VR_PHONE_BUTTONS.push({ x: 108, y: DEMO_Y, w: 100, h: 38, type: 'reset-data' })
+  VR_PHONE_BUTTONS.push({ x: 212, y: DEMO_Y, w: 104, h: 38, type: 'shark' })
 }
 buildVRKeyboardButtons()
 
 function buildVRPhone() {
   vrPhoneCanvas = document.createElement('canvas')
   vrPhoneCanvas.width = 320
-  vrPhoneCanvas.height = 480
+  vrPhoneCanvas.height = 540
   vrPhoneCtx = vrPhoneCanvas.getContext('2d')
   vrPhoneTexture = new THREE.CanvasTexture(vrPhoneCanvas)
   vrPhoneTexture.minFilter = THREE.LinearFilter
@@ -698,14 +711,14 @@ function buildVRPhone() {
   const phoneGroup = new THREE.Group()
 
   // 画面（レイキャスト対象）
-  const screenGeo = new THREE.PlaneGeometry(0.35, 0.52)
+  const screenGeo = new THREE.PlaneGeometry(0.35, 0.59)
   const screenMat = new THREE.MeshBasicMaterial({ map: vrPhoneTexture })
   vrPhoneScreen = new THREE.Mesh(screenGeo, screenMat)
   vrPhoneScreen.position.z = 0.011
   phoneGroup.add(vrPhoneScreen)
 
   // 筐体
-  const frameGeo = new THREE.BoxGeometry(0.38, 0.56, 0.02)
+  const frameGeo = new THREE.BoxGeometry(0.38, 0.63, 0.02)
   const frameMat = new THREE.MeshPhongMaterial({ color: 0x222222 })
   phoneGroup.add(new THREE.Mesh(frameGeo, frameMat))
 
@@ -731,7 +744,7 @@ function buildVRPhone() {
 function updateVRPhoneScreen() {
   if (!vrPhoneCtx) return
   const ctx = vrPhoneCtx
-  const w = 320, h = 480
+  const w = 320, h = 540
   const text = postText.value || ''
 
   // 背景
@@ -832,7 +845,44 @@ function updateVRPhoneScreen() {
       ctx.font = 'bold 14px sans-serif'
       ctx.textAlign = 'center'
       ctx.fillText('VR終了', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'demo-seed') {
+      ctx.fillStyle = isHover ? 'rgba(255,160,50,0.5)' : 'rgba(255,160,50,0.2)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#ffcc88'
+      ctx.font = 'bold 13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('デモ投入', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'reset-data') {
+      ctx.fillStyle = isHover ? 'rgba(255,70,70,0.5)' : 'rgba(255,70,70,0.2)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#ffaaaa'
+      ctx.font = 'bold 13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('リセット', btn.x + btn.w / 2, btn.y + 24)
+    } else if (btn.type === 'shark') {
+      ctx.fillStyle = isHover ? 'rgba(100,100,255,0.5)' : 'rgba(100,100,255,0.2)'
+      ctx.beginPath()
+      ctx.roundRect(btn.x, btn.y, btn.w, btn.h, 6)
+      ctx.fill()
+      ctx.fillStyle = '#aaccff'
+      ctx.font = 'bold 13px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText('サメ襲来', btn.x + btn.w / 2, btn.y + 24)
     }
+  }
+
+  // デバッグ表示
+  if (vrPhoneDebugMsg) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'
+    ctx.fillRect(0, h - 30, w, 30)
+    ctx.fillStyle = '#00ff00'
+    ctx.font = 'bold 14px monospace'
+    ctx.textAlign = 'left'
+    ctx.fillText(vrPhoneDebugMsg, 8, h - 10)
   }
 
   vrPhoneTexture.needsUpdate = true
@@ -857,7 +907,7 @@ function vrPhoneRaycast(worldPos, controllerQuat) {
     const uv = hits[0].uv
     // UV → Canvas座標に変換
     const cx = uv.x * 320
-    const cy = (1 - uv.y) * 480
+    const cy = (1 - uv.y) * 540
     return { cx, cy }
   }
   return null
@@ -870,6 +920,8 @@ function vrPhoneHitTest(cx, cy) {
       return i
     }
   }
+  // デバッグ: 座標をスマホ画面に表示
+  vrPhoneDebugMsg = `tap:(${cx.toFixed(0)},${cy.toFixed(0)})`
   return -1
 }
 
@@ -890,6 +942,15 @@ function vrPhonePress(btnIdx) {
     const idx = VR_KB_MODE_ORDER.indexOf(vrKbMode)
     vrKbMode = VR_KB_MODE_ORDER[(idx + 1) % VR_KB_MODE_ORDER.length]
     buildVRKeyboardButtons()
+  } else if (btn.type === 'demo-seed') {
+    vrPhoneDebugMsg = 'PRESSED: demo-seed'
+    seedDemoData().catch(e => { vrPhoneDebugMsg = 'ERR:' + e.message })
+  } else if (btn.type === 'reset-data') {
+    vrPhoneDebugMsg = 'PRESSED: reset'
+    resetAllData().catch(e => { vrPhoneDebugMsg = 'ERR:' + e.message })
+  } else if (btn.type === 'shark') {
+    vrPhoneDebugMsg = 'PRESSED: shark'
+    if (!shark) spawnShark()
   }
   updateVRPhoneScreen()
 }
@@ -1454,9 +1515,10 @@ function updateShark(dt, elapsed) {
   // 一定確率でサメ出現
   if (!shark) {
     const hotFishes = fishes.filter(f => f.type === 'hot' && !f.eaten)
-    if (hotFishes.length > 0 && Math.random() < 0.002) { // 約毎秒0.12回の確率
-      spawnShark()
-    }
+    // 自動出現は無効化（デモボタンから手動で呼び出す）
+    // if (hotFishes.length > 0 && Math.random() < 0.002) {
+    //   spawnShark()
+    // }
     return
   }
 
@@ -2622,8 +2684,13 @@ function xrAnimateLoop(timestamp, frame) {
           updateVRPhoneScreen()
         }
         // トリガー押した瞬間にボタン実行
-        if (triggerPressed && !xrTriggerWasPressed && hitIdx >= 0) {
-          vrPhonePress(hitIdx)
+        if (triggerPressed && !xrTriggerWasPressed) {
+          if (hitIdx >= 0) {
+            vrPhonePress(hitIdx)
+          } else {
+            vrPhoneDebugMsg = `miss:(${phoneHit.cx.toFixed(0)},${phoneHit.cy.toFixed(0)})`
+          }
+          updateVRPhoneScreen()
         }
       } else {
         if (vrPhoneHoverIdx !== -1) {
@@ -2634,11 +2701,27 @@ function xrAnimateLoop(timestamp, frame) {
       }
       xrTriggerWasPressed = triggerPressed
 
-      // --- 石の掴み＆投げ（グリップ = buttons[1]） ---
+      // --- スマホ掴み移動（グリップ + スマホにレイが当たっている時） ---
       const gripValue = gamepad ? (gamepad.buttons[1]?.value ?? 0) : 0
       const gripPressed = gripValue > 0.5
 
-      if (gripPressed && !xrGrabbing && !isFlying.value && postText.value.trim()) {
+      if (gripPressed && !vrPhoneGrabbing && !xrGrabbing && phoneHit && vrPhoneMesh) {
+        // スマホを掴み始める
+        vrPhoneGrabbing = true
+        vrPhoneGrabOffset.copy(vrPhoneMesh.position).sub(worldPos)
+      }
+      if (vrPhoneGrabbing) {
+        if (gripPressed && vrPhoneMesh) {
+          // 掴み中: コントローラーに追従
+          vrPhoneMesh.position.copy(worldPos).add(vrPhoneGrabOffset)
+        } else {
+          // グリップ離した: 掴み終了
+          vrPhoneGrabbing = false
+        }
+      }
+
+      // --- 石の掴み＆投げ（グリップ = buttons[1]、スマホ掴み中でない時） ---
+      if (gripPressed && !xrGrabbing && !vrPhoneGrabbing && !isFlying.value && postText.value.trim()) {
         // 掴み開始 → テキストがある時だけ手元に石を生成
         xrGrabbing = true
         xrGrabFrames = 0
@@ -3248,6 +3331,25 @@ textarea::placeholder {
   background: rgba(255, 70, 70, 0.4);
 }
 .reset-data-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.shark-btn {
+  margin-top: 6px;
+  padding: 6px 14px;
+  background: rgba(100, 100, 255, 0.2);
+  border: 1px solid rgba(100, 100, 255, 0.4);
+  color: #aaccff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: background 0.2s;
+  width: 100%;
+}
+.shark-btn:hover {
+  background: rgba(100, 100, 255, 0.4);
+}
+.shark-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
