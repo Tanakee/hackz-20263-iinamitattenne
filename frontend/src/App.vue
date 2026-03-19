@@ -119,7 +119,7 @@
           <button
             class="shark-btn"
             :disabled="!!shark"
-            @click="spawnShark()"
+            @click="spawnShark(); wsSend({ type: 'shark-spawn' })"
           >サメ襲来</button>
         </div>
       </div>
@@ -290,6 +290,8 @@ const fishes = []
 // サメ
 let shark = null
 const sharkCutinActive = ref(false)
+let vrCutinSprite = null  // VR用3Dカットイン
+let vrCutinTimer = 0
 // 水柱データ
 const waterColumns = []
 // 飛行中の石
@@ -351,8 +353,12 @@ async function loadWinds() {
 async function seedDemoData() {
   if (isDemoSeeding.value) return
   isDemoSeeding.value = true
+  vrPhoneDebugMsg = `API: ${logicApiUrl}`
+  updateVRPhoneScreen()
   try {
     const res = await fetch(`${logicApiUrl}/demo-seed`, { method: 'POST' })
+    vrPhoneDebugMsg = `seed: status=${res.status}`
+    updateVRPhoneScreen()
     if (res.ok) {
       const data = await res.json()
       // 既存のIDセットを記録
@@ -360,19 +366,24 @@ async function seedDemoData() {
       // データ再読み込み
       await loadPosts()
       // 新しく追加された投稿だけ3Dシーンに石を追加（上空から落下で波紋を起こす）
+      let added = 0
       posts.value.forEach(p => {
         if (!existingIds.has(p.id)) {
           addStoneMesh(p, 5)
+          added++
         }
       })
       await loadWinds()
+      wsSend({ type: 'posts-added' })
+      vrPhoneDebugMsg = `seed: OK +${added} stones`
     } else {
-      console.error('デモデータ投入に失敗しました')
+      vrPhoneDebugMsg = `seed: FAIL ${res.status}`
     }
   } catch (error) {
-    console.error('デモデータ投入エラー:', error)
+    vrPhoneDebugMsg = `ERR[${logicApiUrl}] ${error.message}`
   } finally {
     isDemoSeeding.value = false
+    updateVRPhoneScreen()
   }
 }
 
@@ -380,8 +391,12 @@ async function seedDemoData() {
 async function resetAllData() {
   if (isResetting.value) return
   isResetting.value = true
+  vrPhoneDebugMsg = 'reset: fetching...'
+  updateVRPhoneScreen()
   try {
     const res = await fetch(`${logicApiUrl}/reset-data`, { method: 'POST' })
+    vrPhoneDebugMsg = `reset: status=${res.status}`
+    updateVRPhoneScreen()
     if (res.ok) {
       stoneMeshes.forEach(s => {
         scene.remove(s.group)
@@ -391,13 +406,16 @@ async function resetAllData() {
       posts.value = []
       winds.value = []
       selectedPost.value = null
+      wsSend({ type: 'posts-reset' })
+      vrPhoneDebugMsg = `reset: OK cleared`
     } else {
-      console.error('データリセットに失敗しました')
+      vrPhoneDebugMsg = `reset: FAIL ${res.status}`
     }
   } catch (error) {
-    console.error('データリセットエラー:', error)
+    vrPhoneDebugMsg = `reset: ERR ${error.message}`
   } finally {
     isResetting.value = false
+    updateVRPhoneScreen()
   }
 }
 
@@ -426,6 +444,7 @@ async function likePost(post) {
 
     post.likes = (post.likes || 0) + 1
     playLikeSound()
+    wsSend({ type: 'post-liked', postId: post.id, heat: post.heat })
     // 3Dメッシュの見た目を更新
     const entry = stoneMeshes.find(s => s.post.id === post.id)
     if (entry) {
@@ -950,7 +969,7 @@ function vrPhonePress(btnIdx) {
     resetAllData().catch(e => { vrPhoneDebugMsg = 'ERR:' + e.message })
   } else if (btn.type === 'shark') {
     vrPhoneDebugMsg = 'PRESSED: shark'
-    if (!shark) spawnShark()
+    if (!shark) { spawnShark(); wsSend({ type: 'shark-spawn' }) }
   }
   updateVRPhoneScreen()
 }
@@ -1469,6 +1488,98 @@ function createSharkMesh() {
   return group
 }
 
+// VR用3Dカットイン演出
+function showVRCutin() {
+  if (vrCutinSprite) { scene.remove(vrCutinSprite); vrCutinSprite = null }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 1024
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')
+
+  // 黒帯背景
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'
+  ctx.fillRect(0, 0, 1024, 256)
+
+  // 青い横線
+  const lineY = 128
+  const grad = ctx.createLinearGradient(0, lineY, 1024, lineY)
+  grad.addColorStop(0, 'transparent')
+  grad.addColorStop(0.15, 'rgba(100, 160, 255, 0.8)')
+  grad.addColorStop(0.35, 'transparent')
+  grad.addColorStop(0.65, 'transparent')
+  grad.addColorStop(0.85, 'rgba(100, 160, 255, 0.8)')
+  grad.addColorStop(1, 'transparent')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, lineY - 2, 1024, 4)
+
+  // フラッシュ効果（白い縁）
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
+  ctx.lineWidth = 4
+  ctx.strokeRect(2, 2, 1020, 252)
+
+  // サメ絵文字
+  ctx.font = '100px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('🦈', 400, 128)
+
+  // テキスト
+  ctx.font = 'bold 72px sans-serif'
+  ctx.fillStyle = '#ff3333'
+  ctx.strokeStyle = '#000000'
+  ctx.lineWidth = 8
+  ctx.strokeText('サメ 襲来', 620, 128)
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText('サメ 襲来', 620, 128)
+  // グロー
+  ctx.shadowColor = 'rgba(255, 100, 100, 0.8)'
+  ctx.shadowBlur = 20
+  ctx.fillText('サメ 襲来', 620, 128)
+  ctx.shadowBlur = 0
+
+  const texture = new THREE.CanvasTexture(canvas)
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  })
+  vrCutinSprite = new THREE.Sprite(mat)
+
+  // カメラの前に配置
+  const camWorldPos = new THREE.Vector3()
+  const camWorldDir = new THREE.Vector3()
+  camera.getWorldPosition(camWorldPos)
+  camera.getWorldDirection(camWorldDir)
+  vrCutinSprite.position.copy(camWorldPos).add(camWorldDir.multiplyScalar(1.5))
+  vrCutinSprite.scale.set(3, 0.75, 1)
+
+  scene.add(vrCutinSprite)
+  vrCutinTimer = 2.2
+}
+
+function updateVRCutin(dt) {
+  if (!vrCutinSprite) return
+  vrCutinTimer -= dt
+  // カメラに追従
+  const camWorldPos = new THREE.Vector3()
+  const camWorldDir = new THREE.Vector3()
+  camera.getWorldPosition(camWorldPos)
+  camera.getWorldDirection(camWorldDir)
+  vrCutinSprite.position.copy(camWorldPos).add(camWorldDir.multiplyScalar(1.5))
+  // フェードアウト
+  if (vrCutinTimer < 0.5) {
+    vrCutinSprite.material.opacity = Math.max(vrCutinTimer / 0.5, 0)
+  }
+  if (vrCutinTimer <= 0) {
+    scene.remove(vrCutinSprite)
+    vrCutinSprite.material.dispose()
+    vrCutinSprite.material.map.dispose()
+    vrCutinSprite = null
+  }
+}
+
 function spawnShark() {
   if (shark || sharkCutinActive.value) return
   // 赤い魚がいなければ出現しない
@@ -1477,6 +1588,8 @@ function spawnShark() {
 
   // カットイン演出を開始
   sharkCutinActive.value = true
+  // VR用3Dカットインも表示
+  if (renderer.xr.isPresenting) showVRCutin()
 
   // カットイン終了後にサメを実際に配置
   setTimeout(() => {
@@ -2396,6 +2509,78 @@ function onResize() {
   renderer.setSize(w, h)
 }
 
+// --- WebSocket（デバイス間リアルタイム同期） ---
+let ws = null
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  ws = new WebSocket(`${proto}//${location.host}/ws`)
+  ws.onopen = () => console.log('WS connected')
+  ws.onclose = () => {
+    console.log('WS disconnected, reconnecting...')
+    setTimeout(connectWS, 2000)
+  }
+  ws.onerror = (e) => console.error('WS error:', e)
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      handleWSMessage(data)
+    } catch (e) {
+      console.error('WS message parse error:', e)
+    }
+  }
+}
+
+function wsSend(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data))
+  }
+}
+
+async function handleWSMessage(data) {
+  if (data.type === 'posts-added') {
+    // 他デバイスが石を追加した → データ再読み込みして差分追加
+    const existingIds = new Set(posts.value.map(p => p.id))
+    await loadPosts()
+    posts.value.forEach(p => {
+      if (!existingIds.has(p.id)) {
+        addStoneMesh(p, 5)
+      }
+    })
+    await loadWinds()
+  } else if (data.type === 'posts-reset') {
+    // 他デバイスがリセットした → 全石削除
+    stoneMeshes.forEach(s => {
+      scene.remove(s.group)
+      if (s.body) physicsWorld.removeBody(s.body)
+    })
+    stoneMeshes.length = 0
+    posts.value = []
+    winds.value = []
+    selectedPost.value = null
+  } else if (data.type === 'shark-spawn') {
+    // 他デバイスがサメを召喚した
+    if (!shark && !sharkCutinActive.value) spawnShark()
+  } else if (data.type === 'post-liked') {
+    // いいね同期
+    const post = posts.value.find(p => p.id === data.postId)
+    if (post) {
+      post.heat = data.heat
+      post.likes = (post.likes || 0) + 1
+      const sm = stoneMeshes.find(s => s.post?.id === data.postId)
+      if (sm) { sm.post = post; updateStoneMeshAppearance(sm) }
+    }
+  } else if (data.type === 'post-submitted') {
+    // 他デバイスが投稿した → データ再読み込み
+    const existingIds = new Set(posts.value.map(p => p.id))
+    await loadPosts()
+    posts.value.forEach(p => {
+      if (!existingIds.has(p.id)) {
+        addStoneMesh(p, 5)
+      }
+    })
+  }
+}
+
 // --- ライフサイクル ---
 onMounted(async () => {
   await loadPosts()
@@ -2404,6 +2589,7 @@ onMounted(async () => {
   animate()
   checkApiStatus()
   checkXRSupport()
+  connectWS()
   window.addEventListener('resize', onResize)
   // ローディング画面をフェードアウト
   const loader = document.getElementById('initial-loading')
@@ -2417,12 +2603,13 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   if (animationId) cancelAnimationFrame(animationId)
   if (renderer) renderer.dispose()
+  if (ws) ws.close()
 })
 
 // --- 投稿 ---
 // --- 投稿 ---
 // Logic APIのURL
-const logicApiUrl = import.meta.env.VITE_API_LOGIC_URL || 'http://localhost:8000'
+const logicApiUrl = import.meta.env.VITE_API_LOGIC_URL || '/api/logic'
 
 const submitPost = async () => {
   if (!postText.value.trim() || postText.value.length > 500) return
@@ -2486,6 +2673,7 @@ const submitPost = async () => {
 
     // 3D表示は常に行う
     throwStone(targetX, targetZ, mass, postText.value, subjectScale)
+    wsSend({ type: 'post-submitted' })
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
@@ -2629,6 +2817,7 @@ function xrAnimateLoop(timestamp, frame) {
   updateWaterColumns(dt)
   try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
   try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
+  updateVRCutin(dt)
   updateStones(elapsed, dt)
   updateFlyingStone(dt)
   decayTimer += dt
@@ -2714,6 +2903,10 @@ function xrAnimateLoop(timestamp, frame) {
         if (gripPressed && vrPhoneMesh) {
           // 掴み中: コントローラーに追従
           vrPhoneMesh.position.copy(worldPos).add(vrPhoneGrabOffset)
+          // ユーザーの方を向く
+          const camWorldPos = new THREE.Vector3()
+          camera.getWorldPosition(camWorldPos)
+          vrPhoneMesh.lookAt(camWorldPos)
         } else {
           // グリップ離した: 掴み終了
           vrPhoneGrabbing = false

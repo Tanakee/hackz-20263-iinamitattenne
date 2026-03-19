@@ -28,8 +28,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - VITE_API_GRAVITY_URL=http://localhost:8080
-      - VITE_API_LOGIC_URL=http://localhost:8000
+      - VITE_API_GRAVITY_URL=/api/gravity
+      - VITE_API_LOGIC_URL=/api/logic
     command: npm run dev
     networks:
       - hackz-network
