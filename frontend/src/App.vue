@@ -1017,6 +1017,10 @@ function vrPhonePress(btnIdx) {
     if (!shark) { spawnShark(); wsSend({ type: 'shark-spawn' }) }
   }
   updateVRPhoneScreen()
+  // テキスト変更時に浮遊石を更新
+  if (xrActive.value && !xrGrabbing) {
+    spawnFloatingStone()
+  }
 }
 
 function initThree() {
@@ -2813,6 +2817,8 @@ let xrPeakVelocity = new THREE.Vector3()
 const XR_POS_HISTORY_SIZE = 8
 let xrPosHistory = []  // { pos: Vector3, time: number }
 let xrStoneMesh = null  // 手に持っている石のメッシュ
+let xrFloatingStone = null // テキスト入力後に目の前に浮く石
+let xrFloatingStoneText = '' // 浮遊石に対応するテキスト
 let xrHandMesh = null   // メイン手のモデル
 let xrSubHandMesh = null // もう片方の手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
@@ -2875,6 +2881,72 @@ function setHandGrip(handMesh, grip) {
   if (thumb) thumb.rotation.x = -grip * Math.PI * 0.3
 }
 
+// テキスト入力時に目の前に石を出現させる
+function spawnFloatingStone() {
+  if (xrFloatingStone) {
+    scene.remove(xrFloatingStone)
+    xrFloatingStone = null
+  }
+  const text = postText.value.trim()
+  if (!text) return
+
+  const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
+  const verts = stoneGeo.attributes.position
+  for (let i = 0; i < verts.count; i++) {
+    verts.setY(i, verts.getY(i) * 0.5)
+    const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
+    verts.setX(i, verts.getX(i) * n)
+    verts.setZ(i, verts.getZ(i) * n)
+  }
+  stoneGeo.computeVertexNormals()
+
+  const stoneMat = new THREE.MeshBasicMaterial({ color: 0x66bbff })
+  xrFloatingStone = new THREE.Mesh(stoneGeo, stoneMat)
+
+  // 光る球体（グロー）
+  const glowGeo = new THREE.SphereGeometry(0.08, 12, 8)
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x4488ff,
+    transparent: true,
+    opacity: 0.3,
+  })
+  const glow = new THREE.Mesh(glowGeo, glowMat)
+  glow.name = 'glow'
+  xrFloatingStone.add(glow)
+
+  // カメラの前方に配置
+  const camWorldPos = new THREE.Vector3()
+  const camWorldDir = new THREE.Vector3()
+  camera.getWorldPosition(camWorldPos)
+  camera.getWorldDirection(camWorldDir)
+
+  // 目の前50cm、少し下に
+  xrFloatingStone.position.copy(camWorldPos)
+    .add(camWorldDir.multiplyScalar(0.5))
+  xrFloatingStone.position.y -= 0.15
+
+  xrFloatingStoneText = text
+  scene.add(xrFloatingStone)
+}
+
+// 浮遊石のアニメーション（ゆらゆら浮く）
+function updateFloatingStone(elapsed) {
+  if (!xrFloatingStone) return
+  if (!xrFloatingStone.userData.baseY) {
+    xrFloatingStone.userData.baseY = xrFloatingStone.position.y
+  }
+  // 上下にゆらゆら
+  xrFloatingStone.position.y = xrFloatingStone.userData.baseY + Math.sin(elapsed * 3) * 0.02
+  // 回転
+  xrFloatingStone.rotation.y = elapsed * 1.5
+  // グロー脈動
+  const glow = xrFloatingStone.getObjectByName('glow')
+  if (glow) {
+    const pulse = 1 + Math.sin(elapsed * 4) * 0.3
+    glow.scale.set(pulse, pulse, pulse)
+  }
+}
+
 async function checkXRSupport() {
   if (navigator.xr) {
     xrSupported.value = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)
@@ -2927,6 +2999,7 @@ async function toggleXR() {
       }
       // 手持ち石・手モデルを消す
       if (xrStoneMesh) { scene.remove(xrStoneMesh); xrStoneMesh = null }
+      if (xrFloatingStone) { scene.remove(xrFloatingStone); xrFloatingStone = null }
       if (xrHandMesh) { scene.remove(xrHandMesh); xrHandMesh = null }
       if (xrSubHandMesh) { scene.remove(xrSubHandMesh); xrSubHandMesh = null }
       if (vrPhoneMesh) { scene.remove(vrPhoneMesh); vrPhoneMesh = null; vrPhoneScreen = null }
@@ -2951,6 +3024,7 @@ function xrAnimateLoop(timestamp, frame) {
   updateSplashes(dt)
   updateBubbles(dt)
   updateSteam(dt)
+  updateFloatingStone(elapsed)
   updateWaterColumns(dt)
   try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
   try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
@@ -2969,19 +3043,31 @@ function xrAnimateLoop(timestamp, frame) {
   }
   controllers.sort((a, b) => (a.handedness === 'left' ? -1 : 1))
 
+  // XR座標→ワールド座標変換（リグの回転＋位置を適用）
+  const rigRotY = xrCameraRig ? xrCameraRig.rotation.y : 0
+  const rigPos = xrCameraRig ? xrCameraRig.position : new THREE.Vector3()
+  const rigQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rigRotY)
+  function xrToWorld(xrPosition) {
+    return xrPosition.clone().applyQuaternion(rigQuat).add(rigPos)
+  }
+  function xrToWorldQuat(xrQuat) {
+    return rigQuat.clone().multiply(xrQuat)
+  }
+
   // サブハンド（2本目）の位置更新
   if (controllers.length >= 2 && xrSubHandMesh) {
     const subPose = frame.getPose(controllers[1].gripSpace, xrRefSpace)
     if (subPose) {
-      const rigOffset = xrCameraRig ? xrCameraRig.position : new THREE.Vector3()
-      const subPos = new THREE.Vector3(
+      const subXrPos = new THREE.Vector3(
         subPose.transform.position.x,
         subPose.transform.position.y,
         subPose.transform.position.z
-      ).add(rigOffset)
+      )
+      const subPos = xrToWorld(subXrPos)
       const sq = subPose.transform.orientation
+      const subQuat = xrToWorldQuat(new THREE.Quaternion(sq.x, sq.y, sq.z, sq.w))
       xrSubHandMesh.position.copy(subPos)
-      xrSubHandMesh.quaternion.set(sq.x, sq.y, sq.z, sq.w)
+      xrSubHandMesh.quaternion.copy(subQuat)
       // サブハンドの握り反映
       const subGamepad = controllers[1].gamepad
       const subGrip = subGamepad ? Math.max(subGamepad.buttons[0]?.value ?? 0, subGamepad.buttons[1]?.value ?? 0) : 0
@@ -2996,16 +3082,15 @@ function xrAnimateLoop(timestamp, frame) {
   if (controllerSource) {
     const pose = frame.getPose(controllerSource.gripSpace, xrRefSpace)
     if (pose) {
-      // XR空間でのコントローラー位置（リグオフセットなし＝速度計算用）
+      // XR空間でのコントローラー位置（速度計算用）
       const xrPos = new THREE.Vector3(
         pose.transform.position.x,
         pose.transform.position.y,
         pose.transform.position.z
       )
 
-      // ワールド座標（リグの位置を加算）
-      const rigOffset = xrCameraRig ? xrCameraRig.position : new THREE.Vector3()
-      const worldPos = xrPos.clone().add(rigOffset)
+      // ワールド座標（リグの回転＋位置を適用）
+      const worldPos = xrToWorld(xrPos)
 
       // 速度はXR空間の差分で計算（リグは動かないので同じ）
       if (xrPrevPos) {
@@ -3013,9 +3098,9 @@ function xrAnimateLoop(timestamp, frame) {
       }
       xrPrevPos = xrPos.clone()
 
-      // 手モデルをコントローラー位置に追従
+      // 手モデルをコントローラー位置に追従（リグ回転を適用）
       const q = pose.transform.orientation
-      const controllerQuat = new THREE.Quaternion(q.x, q.y, q.z, q.w)
+      const controllerQuat = xrToWorldQuat(new THREE.Quaternion(q.x, q.y, q.z, q.w))
       if (xrHandMesh) {
         xrHandMesh.position.copy(worldPos)
         xrHandMesh.quaternion.copy(controllerQuat)
@@ -3088,42 +3173,22 @@ function xrAnimateLoop(timestamp, frame) {
         }
       }
 
-      // --- 石の掴み＆投げ（グリップ = buttons[1]、スマホ掴み中でない時） ---
-      if (gripPressed && !xrGrabbing && !vrPhoneGrabbing && !isFlying.value && postText.value.trim()) {
-        // 掴み開始 → テキストがある時だけ手元に石を生成
-        xrGrabbing = true
-        xrGrabFrames = 0
-        xrPeakSpeed = 0
-        xrPeakVelocity.set(0, 0, 0)
-        xrPosHistory = []
+      // --- 石の掴み＆投げ（グリップ = buttons[1]、浮遊石を掴む） ---
+      const GRAB_RADIUS = 0.25 // 石を掴める距離
+      if (gripPressed && !xrGrabbing && !vrPhoneGrabbing && !isFlying.value && xrFloatingStone) {
+        // 浮遊石との距離を判定
+        const dist = worldPos.distanceTo(xrFloatingStone.position)
+        if (dist < GRAB_RADIUS) {
+          // 掴み開始 → 浮遊石を手に移す
+          xrGrabbing = true
+          xrGrabFrames = 0
+          xrPeakSpeed = 0
+          xrPeakVelocity.set(0, 0, 0)
+          xrPosHistory = []
 
-        if (!xrStoneMesh) {
-          const stoneGeo = new THREE.SphereGeometry(0.05, 8, 6)
-          const verts = stoneGeo.attributes.position
-          for (let i = 0; i < verts.count; i++) {
-            verts.setY(i, verts.getY(i) * 0.5)
-            const n = 0.7 + 0.6 * Math.abs(Math.sin(i * 3.7) * Math.cos(i * 2.3))
-            verts.setX(i, verts.getX(i) * n)
-            verts.setZ(i, verts.getZ(i) * n)
-          }
-          stoneGeo.computeVertexNormals()
-
-          // MeshBasicMaterialならライティング不要で確実に見える
-          const stoneMat = new THREE.MeshBasicMaterial({ color: 0x66bbff })
-          xrStoneMesh = new THREE.Mesh(stoneGeo, stoneMat)
-
-          // 光る球体（グロー）
-          const glowGeo = new THREE.SphereGeometry(0.08, 12, 8)
-          const glowMat = new THREE.MeshBasicMaterial({
-            color: 0x4488ff,
-            transparent: true,
-            opacity: 0.3,
-          })
-          const glow = new THREE.Mesh(glowGeo, glowMat)
-          glow.name = 'glow'
-          xrStoneMesh.add(glow)
-
-          scene.add(xrStoneMesh)
+          // 浮遊石をそのまま手持ち石に転用
+          xrStoneMesh = xrFloatingStone
+          xrFloatingStone = null
         }
       } else if (gripPressed && xrGrabbing) {
         // 掴み中 → 石を手のワールド座標に追従
@@ -3158,11 +3223,8 @@ function xrAnimateLoop(timestamp, frame) {
           const last = hist[hist.length - 1]
           const dt = last.time - first.time
 
-          // 始点→終点のベクトル（投げの方向）をカメラリグの回転に合わせる
+          // 始点→終点のベクトル（投げの方向）※worldPosは既にリグ回転適用済み
           const displacement = new THREE.Vector3().subVectors(last.pos, first.pos)
-          if (xrCameraRig) {
-            displacement.applyAxisAngle(new THREE.Vector3(0, 1, 0), xrCameraRig.rotation.y)
-          }
           // 実際の経路長（各フレーム間距離の合計）
           let pathLength = 0
           for (let i = 1; i < hist.length; i++) {
