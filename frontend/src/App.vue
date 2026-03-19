@@ -1336,9 +1336,8 @@ function updateFishes(dt, elapsed) {
       f.mesh.position.z += (dz / dist) * moveSpeed
     }
 
-    // 進行方向を向く
-    const angle = Math.atan2(dx, dz)
-    f.mesh.rotation.y = angle
+    // 進行方向を向く（メッシュの頭が+X方向なので90度オフセット）
+    f.mesh.rotation.y = Math.atan2(dx, dz) - Math.PI / 2
 
     // 尾びれアニメーション
     f.tailPhase += dt * 8
@@ -1651,7 +1650,7 @@ function updateShark(dt, elapsed) {
       const spd = s.speed * 1.5 * dt
       s.mesh.position.x += (dx / dist) * spd
       s.mesh.position.z += (dz / dist) * spd
-      s.mesh.rotation.y = Math.atan2(dx, dz)
+      s.mesh.rotation.y = Math.atan2(dx, dz) - Math.PI / 2
     } else {
       // 退場完了
       scene.remove(s.mesh)
@@ -1717,7 +1716,7 @@ function updateShark(dt, elapsed) {
       s.mesh.position.x += (dx / dist) * spd
       s.mesh.position.y += (dy / dist) * spd * 0.3
       s.mesh.position.z += (dz / dist) * spd
-      s.mesh.rotation.y = Math.atan2(dx, dz)
+      s.mesh.rotation.y = Math.atan2(dx, dz) - Math.PI / 2
     }
   }
 
