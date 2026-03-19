@@ -3,9 +3,12 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const mysql = require('mysql2/promise');
 const OpenAI = require('openai');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = 8080;
+const server = http.createServer(app);
 const NLP_API_URL = process.env.NLP_API_URL || 'http://localhost:8001';
 
 // DB接続プール
@@ -263,8 +266,39 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// --- WebSocket（デバイス間リアルタイム同期） ---
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+function broadcast(data, sender) {
+  const msg = JSON.stringify(data);
+  for (const client of wss.clients) {
+    if (client !== sender && client.readyState === 1) {
+      client.send(msg);
+    }
+  }
+}
+
+wss.on('connection', (ws) => {
+  console.log(`🔌 WS connected (total: ${wss.clients.size})`);
+
+  ws.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw);
+      // クライアントからのイベントを他の全クライアントにブロードキャスト
+      broadcast(data, ws);
+    } catch (e) {
+      console.error('WS parse error:', e);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log(`🔌 WS disconnected (total: ${wss.clients.size})`);
+  });
+});
+
 // サーバー起動
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`✨ Gravity API listening on port ${PORT}`);
+  console.log(`🔌 WebSocket ready on ws://0.0.0.0:${PORT}/ws`);
   console.log(`🌊 重力計算を開始しました`);
 });

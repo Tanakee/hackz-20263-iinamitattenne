@@ -119,7 +119,7 @@
           <button
             class="shark-btn"
             :disabled="!!shark"
-            @click="spawnShark()"
+            @click="spawnShark(); wsSend({ type: 'shark-spawn' })"
           >サメ襲来</button>
         </div>
       </div>
@@ -374,6 +374,7 @@ async function seedDemoData() {
         }
       })
       await loadWinds()
+      wsSend({ type: 'posts-added' })
       vrPhoneDebugMsg = `seed: OK +${added} stones`
     } else {
       vrPhoneDebugMsg = `seed: FAIL ${res.status}`
@@ -405,6 +406,7 @@ async function resetAllData() {
       posts.value = []
       winds.value = []
       selectedPost.value = null
+      wsSend({ type: 'posts-reset' })
       vrPhoneDebugMsg = `reset: OK cleared`
     } else {
       vrPhoneDebugMsg = `reset: FAIL ${res.status}`
@@ -442,6 +444,7 @@ async function likePost(post) {
 
     post.likes = (post.likes || 0) + 1
     playLikeSound()
+    wsSend({ type: 'post-liked', postId: post.id, heat: post.heat })
     // 3Dメッシュの見た目を更新
     const entry = stoneMeshes.find(s => s.post.id === post.id)
     if (entry) {
@@ -966,7 +969,7 @@ function vrPhonePress(btnIdx) {
     resetAllData().catch(e => { vrPhoneDebugMsg = 'ERR:' + e.message })
   } else if (btn.type === 'shark') {
     vrPhoneDebugMsg = 'PRESSED: shark'
-    if (!shark) spawnShark()
+    if (!shark) { spawnShark(); wsSend({ type: 'shark-spawn' }) }
   }
   updateVRPhoneScreen()
 }
@@ -2506,6 +2509,78 @@ function onResize() {
   renderer.setSize(w, h)
 }
 
+// --- WebSocket（デバイス間リアルタイム同期） ---
+let ws = null
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  ws = new WebSocket(`${proto}//${location.host}/ws`)
+  ws.onopen = () => console.log('WS connected')
+  ws.onclose = () => {
+    console.log('WS disconnected, reconnecting...')
+    setTimeout(connectWS, 2000)
+  }
+  ws.onerror = (e) => console.error('WS error:', e)
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      handleWSMessage(data)
+    } catch (e) {
+      console.error('WS message parse error:', e)
+    }
+  }
+}
+
+function wsSend(data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data))
+  }
+}
+
+async function handleWSMessage(data) {
+  if (data.type === 'posts-added') {
+    // 他デバイスが石を追加した → データ再読み込みして差分追加
+    const existingIds = new Set(posts.value.map(p => p.id))
+    await loadPosts()
+    posts.value.forEach(p => {
+      if (!existingIds.has(p.id)) {
+        addStoneMesh(p, 5)
+      }
+    })
+    await loadWinds()
+  } else if (data.type === 'posts-reset') {
+    // 他デバイスがリセットした → 全石削除
+    stoneMeshes.forEach(s => {
+      scene.remove(s.group)
+      if (s.body) physicsWorld.removeBody(s.body)
+    })
+    stoneMeshes.length = 0
+    posts.value = []
+    winds.value = []
+    selectedPost.value = null
+  } else if (data.type === 'shark-spawn') {
+    // 他デバイスがサメを召喚した
+    if (!shark && !sharkCutinActive.value) spawnShark()
+  } else if (data.type === 'post-liked') {
+    // いいね同期
+    const post = posts.value.find(p => p.id === data.postId)
+    if (post) {
+      post.heat = data.heat
+      post.likes = (post.likes || 0) + 1
+      const sm = stoneMeshes.find(s => s.post?.id === data.postId)
+      if (sm) { sm.post = post; updateStoneMeshAppearance(sm) }
+    }
+  } else if (data.type === 'post-submitted') {
+    // 他デバイスが投稿した → データ再読み込み
+    const existingIds = new Set(posts.value.map(p => p.id))
+    await loadPosts()
+    posts.value.forEach(p => {
+      if (!existingIds.has(p.id)) {
+        addStoneMesh(p, 5)
+      }
+    })
+  }
+}
+
 // --- ライフサイクル ---
 onMounted(async () => {
   await loadPosts()
@@ -2514,6 +2589,7 @@ onMounted(async () => {
   animate()
   checkApiStatus()
   checkXRSupport()
+  connectWS()
   window.addEventListener('resize', onResize)
   // ローディング画面をフェードアウト
   const loader = document.getElementById('initial-loading')
@@ -2527,6 +2603,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   if (animationId) cancelAnimationFrame(animationId)
   if (renderer) renderer.dispose()
+  if (ws) ws.close()
 })
 
 // --- 投稿 ---
@@ -2596,6 +2673,7 @@ const submitPost = async () => {
 
     // 3D表示は常に行う
     throwStone(targetX, targetZ, mass, postText.value, subjectScale)
+    wsSend({ type: 'post-submitted' })
     postText.value = ''
   } catch (error) {
     console.error('投稿送信エラー:', error)
