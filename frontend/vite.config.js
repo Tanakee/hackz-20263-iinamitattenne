@@ -18,6 +18,11 @@ export default defineConfig({
         target: 'http://logic-api:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/logic/, '')
+      },
+      '/ws': {
+        target: 'ws://gravity-api:8080',
+        ws: true,
+        changeOrigin: true,
       }
     }
   }
