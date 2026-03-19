@@ -272,6 +272,48 @@ function playLikeSound() {
   osc.start(now)
   osc.stop(now + 0.15)
 }
+
+// ジュー音（熱い石の着水）
+function playSizzleSound(heat) {
+  if (!audioCtx) return
+  const now = audioCtx.currentTime
+  const intensity = Math.min(heat / 100, 1)
+
+  // ホワイトノイズ（ジュー）
+  const duration = 0.5 + intensity * 1.0
+  const bufferSize = Math.floor(audioCtx.sampleRate * duration)
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.3))
+  }
+  const noise = audioCtx.createBufferSource()
+  noise.buffer = buffer
+
+  // ハイパスフィルタ（シュー感）
+  const hp = audioCtx.createBiquadFilter()
+  hp.type = 'highpass'
+  hp.frequency.setValueAtTime(3000 + intensity * 2000, now)
+  hp.frequency.exponentialRampToValueAtTime(1000, now + duration)
+
+  // バンドパス（ジュー感）
+  const bp = audioCtx.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.setValueAtTime(4000, now)
+  bp.Q.value = 0.5
+
+  const gain = audioCtx.createGain()
+  gain.gain.setValueAtTime(0.06 + intensity * 0.1, now)
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration)
+
+  noise.connect(hp)
+  hp.connect(bp)
+  bp.connect(gain)
+  gain.connect(audioCtx.destination)
+  noise.start(now)
+  noise.stop(now + duration)
+}
+
 const WATER_SEG = 128
 const WATER_SIZE = 40
 
@@ -285,6 +327,9 @@ let splashData = []
 // 泡パーティクル
 let bubbleParticles = null
 let bubbleData = []
+// 蒸気パーティクル
+let steamParticles = null
+let steamData = []
 // 魚データ
 const fishes = []
 // サメ
@@ -1138,6 +1183,21 @@ function initThree() {
   })
   bubbleParticles = new THREE.Points(bubbleGeo, bubbleMat)
   scene.add(bubbleParticles)
+
+  // 蒸気用パーティクルシステム
+  const steamGeo = new THREE.BufferGeometry()
+  const maxSteam = 150
+  const steamPositions = new Float32Array(maxSteam * 3)
+  steamGeo.setAttribute('position', new THREE.BufferAttribute(steamPositions, 3))
+  const steamMat = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 0.5,
+    transparent: true,
+    opacity: 0.4,
+    depthWrite: false,
+  })
+  steamParticles = new THREE.Points(steamGeo, steamMat)
+  scene.add(steamParticles)
 
   // 魚を配置
   createFishes()
@@ -2186,6 +2246,52 @@ function updateBubbles(dt) {
   positions.needsUpdate = true
 }
 
+// --- 蒸気（熱い石の着水時） ---
+function addSteam(worldX, worldZ, heat) {
+  const intensity = Math.min(heat / 100, 1)
+  const count = Math.floor(10 + intensity * 30)
+  for (let i = 0; i < count; i++) {
+    const spread = 0.5 + intensity * 1.5
+    steamData.push({
+      x: worldX + (Math.random() - 0.5) * spread,
+      y: 0.1 + Math.random() * 0.3,
+      z: worldZ + (Math.random() - 0.5) * spread,
+      vx: (Math.random() - 0.5) * 0.8,
+      vy: 2 + Math.random() * 3 * intensity,
+      vz: (Math.random() - 0.5) * 0.8,
+      life: 1.0 + intensity * 1.0,
+    })
+  }
+  while (steamData.length > 150) steamData.shift()
+}
+
+function updateSteam(dt) {
+  for (let i = steamData.length - 1; i >= 0; i--) {
+    const s = steamData[i]
+    s.x += s.vx * dt
+    s.y += s.vy * dt
+    s.z += s.vz * dt
+    s.vx += (Math.random() - 0.5) * 1.0 * dt // ゆらゆら拡散
+    s.vz += (Math.random() - 0.5) * 1.0 * dt
+    s.vy *= 0.98 // 徐々に減速
+    s.life -= dt * 0.8
+    if (s.life <= 0) {
+      steamData.splice(i, 1)
+    }
+  }
+  const positions = steamParticles.geometry.attributes.position
+  for (let i = 0; i < 150; i++) {
+    if (i < steamData.length) {
+      positions.setXYZ(i, steamData[i].x, steamData[i].y, steamData[i].z)
+    } else {
+      positions.setXYZ(i, 0, -100, 0)
+    }
+  }
+  positions.needsUpdate = true
+  // 残りパーティクルに応じて透明度を調整
+  steamParticles.material.opacity = steamData.length > 0 ? 0.4 : 0
+}
+
 // --- 水柱 ---
 function addWaterColumn(worldX, worldZ, scale) {
   const s = scale / 100
@@ -2418,6 +2524,12 @@ function updateStones(elapsed, dt) {
         s.body.linearDamping = 0.9
         s.body.angularDamping = 0.95
         s.needsRipple = false
+        // 熱い石なら蒸気＋ジュー音
+        const heat = parseFloat(s.post.heat) || 0
+        if (heat >= 30) {
+          addSteam(s.body.position.x, s.body.position.z, heat)
+          playSizzleSound(heat)
+        }
       }
     }
 
@@ -2481,6 +2593,7 @@ function animate() {
   updateRipples(dt)
   updateSplashes(dt)
   updateBubbles(dt)
+  updateSteam(dt)
   updateWaterColumns(dt)
   try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
   try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
@@ -2700,7 +2813,8 @@ let xrPeakVelocity = new THREE.Vector3()
 const XR_POS_HISTORY_SIZE = 8
 let xrPosHistory = []  // { pos: Vector3, time: number }
 let xrStoneMesh = null  // 手に持っている石のメッシュ
-let xrHandMesh = null   // 手のモデル
+let xrHandMesh = null   // メイン手のモデル
+let xrSubHandMesh = null // もう片方の手のモデル
 let xrTriggerWasPressed = false  // トリガー前フレーム状態（スマホ操作用）
 const VR_PHRASES = [
   'VRから一石！',
@@ -2712,33 +2826,53 @@ const VR_PHRASES = [
   '人類の未来を考える',
 ]
 
-function createHandMesh() {
+function createHandMesh(side = 'left') {
   const hand = new THREE.Group()
   const skinColor = 0xdeb896
   const skinMat = new THREE.MeshPhongMaterial({ color: skinColor, flatShading: true })
+  const mirror = side === 'right' ? -1 : 1
 
   // 手のひら
   const palmGeo = new THREE.BoxGeometry(0.08, 0.03, 0.10)
   const palm = new THREE.Mesh(palmGeo, skinMat)
   hand.add(palm)
 
-  // 指5本
-  const fingerOffsets = [
-    { x: -0.03, z: -0.07, len: 0.06, rot: 0 },      // 小指
-    { x: -0.015, z: -0.075, len: 0.07, rot: 0 },     // 薬指
-    { x: 0, z: -0.08, len: 0.075, rot: 0 },           // 中指
-    { x: 0.015, z: -0.075, len: 0.07, rot: 0 },       // 人差し指
-    { x: 0.04, z: -0.03, len: 0.045, rot: 0.5 },      // 親指
+  // 指5本（ピボット付きで曲げられる）
+  const fingerConfigs = [
+    { x: -0.03, z: -0.07, len: 0.06, rotY: 0, name: 'finger0' },      // 小指
+    { x: -0.015, z: -0.075, len: 0.07, rotY: 0, name: 'finger1' },     // 薬指
+    { x: 0, z: -0.08, len: 0.075, rotY: 0, name: 'finger2' },           // 中指
+    { x: 0.015, z: -0.075, len: 0.07, rotY: 0, name: 'finger3' },       // 人差し指
+    { x: 0.04, z: -0.03, len: 0.045, rotY: 0.5, name: 'thumb' },        // 親指
   ]
-  for (const f of fingerOffsets) {
+  for (const f of fingerConfigs) {
+    const pivot = new THREE.Group()
+    pivot.position.set(f.x * mirror, 0, f.z)
+    pivot.rotation.y = f.rotY * mirror
+    pivot.name = f.name
+
     const fingerGeo = new THREE.BoxGeometry(0.015, 0.015, f.len)
     const finger = new THREE.Mesh(fingerGeo, skinMat)
-    finger.position.set(f.x, 0, f.z - f.len / 2)
-    finger.rotation.y = f.rot
-    hand.add(finger)
+    finger.position.set(0, 0, -f.len / 2)
+    pivot.add(finger)
+    hand.add(pivot)
   }
 
+  hand.userData.side = side
   return hand
+}
+
+// グリップ値(0〜1)に応じて指を曲げる
+function setHandGrip(handMesh, grip) {
+  if (!handMesh) return
+  const curl = -grip * Math.PI * 0.45 // 最大約80度（内側に曲げる）
+  for (const name of ['finger0', 'finger1', 'finger2', 'finger3']) {
+    const pivot = handMesh.getObjectByName(name)
+    if (pivot) pivot.rotation.x = curl
+  }
+  // 親指は内側に曲げる
+  const thumb = handMesh.getObjectByName('thumb')
+  if (thumb) thumb.rotation.x = -grip * Math.PI * 0.3
 }
 
 async function checkXRSupport() {
@@ -2765,9 +2899,11 @@ async function toggleXR() {
     scene.add(xrCameraRig)
     xrCameraRig.add(camera)
 
-    // 手モデルを生成
+    // 手モデルを生成（両手）
     xrHandMesh = createHandMesh()
     scene.add(xrHandMesh)
+    xrSubHandMesh = createHandMesh('right')
+    scene.add(xrSubHandMesh)
 
     // VR内スマホパネルを生成
     buildVRPhone()
@@ -2792,6 +2928,7 @@ async function toggleXR() {
       // 手持ち石・手モデルを消す
       if (xrStoneMesh) { scene.remove(xrStoneMesh); xrStoneMesh = null }
       if (xrHandMesh) { scene.remove(xrHandMesh); xrHandMesh = null }
+      if (xrSubHandMesh) { scene.remove(xrSubHandMesh); xrSubHandMesh = null }
       if (vrPhoneMesh) { scene.remove(vrPhoneMesh); vrPhoneMesh = null; vrPhoneScreen = null }
       if (vrPhoneLaser) { scene.remove(vrPhoneLaser); vrPhoneLaser = null }
     })
@@ -2813,6 +2950,7 @@ function xrAnimateLoop(timestamp, frame) {
   updateRipples(dt)
   updateSplashes(dt)
   updateBubbles(dt)
+  updateSteam(dt)
   updateWaterColumns(dt)
   try { updateFishes(dt, elapsed) } catch (e) { console.error('updateFishes error:', e) }
   try { updateShark(dt, elapsed) } catch (e) { console.error('updateShark error:', e) }
@@ -2822,13 +2960,39 @@ function xrAnimateLoop(timestamp, frame) {
   decayTimer += dt
   if (decayTimer > 2) { decayTimer = 0; try { decayHeat() } catch (e) { console.error('decayHeat error:', e) } }
 
-  // コントローラー処理（掴んで投げる方式）
-  // 最初に見つけたgripSpace付きコントローラーだけ処理（2本混在防止）
+  // コントローラー処理
   const session = frame.session
-  let controllerSource = null
+  // 全コントローラーからgripSpace付きを収集（左手=0, 右手=1）
+  const controllers = []
   for (const source of session.inputSources) {
-    if (source.gripSpace) { controllerSource = source; break }
+    if (source.gripSpace) controllers.push(source)
   }
+  controllers.sort((a, b) => (a.handedness === 'left' ? -1 : 1))
+
+  // サブハンド（2本目）の位置更新
+  if (controllers.length >= 2 && xrSubHandMesh) {
+    const subPose = frame.getPose(controllers[1].gripSpace, xrRefSpace)
+    if (subPose) {
+      const rigOffset = xrCameraRig ? xrCameraRig.position : new THREE.Vector3()
+      const subPos = new THREE.Vector3(
+        subPose.transform.position.x,
+        subPose.transform.position.y,
+        subPose.transform.position.z
+      ).add(rigOffset)
+      const sq = subPose.transform.orientation
+      xrSubHandMesh.position.copy(subPos)
+      xrSubHandMesh.quaternion.set(sq.x, sq.y, sq.z, sq.w)
+      // サブハンドの握り反映
+      const subGamepad = controllers[1].gamepad
+      const subGrip = subGamepad ? Math.max(subGamepad.buttons[0]?.value ?? 0, subGamepad.buttons[1]?.value ?? 0) : 0
+      setHandGrip(xrSubHandMesh, subGrip)
+    }
+  } else if (xrSubHandMesh) {
+    xrSubHandMesh.position.set(0, -100, 0) // 隠す
+  }
+
+  // メインコントローラー（1本目）で操作
+  const controllerSource = controllers[0] || null
   if (controllerSource) {
     const pose = frame.getPose(controllerSource.gripSpace, xrRefSpace)
     if (pose) {
@@ -2859,6 +3023,10 @@ function xrAnimateLoop(timestamp, frame) {
 
       const gamepad = controllerSource.gamepad
 
+      // メインハンドの握り反映
+      const mainGrip = gamepad ? (gamepad.buttons[1]?.value ?? 0) : 0
+      setHandGrip(xrHandMesh, Math.max(mainGrip, gamepad ? (gamepad.buttons[0]?.value ?? 0) : 0))
+
       // --- スマホ操作（トリガー = buttons[0]でポイント＆クリック） ---
       const triggerValue = gamepad ? (gamepad.buttons[0]?.value ?? 0) : 0
       const triggerPressed = triggerValue > 0.5
@@ -2888,6 +3056,14 @@ function xrAnimateLoop(timestamp, frame) {
         if (vrPhoneLaser) vrPhoneLaser.visible = false
       }
       xrTriggerWasPressed = triggerPressed
+
+      // --- スティックで体の向きを回転（axes[2]が左右） ---
+      if (gamepad && gamepad.axes.length >= 4 && xrCameraRig) {
+        const stickX = gamepad.axes[2] // 左右
+        if (Math.abs(stickX) > 0.5) {
+          xrCameraRig.rotation.y -= stickX * dt * 2.0 // スナップ風の回転
+        }
+      }
 
       // --- スマホ掴み移動（グリップ + スマホにレイが当たっている時） ---
       const gripValue = gamepad ? (gamepad.buttons[1]?.value ?? 0) : 0
@@ -2982,8 +3158,11 @@ function xrAnimateLoop(timestamp, frame) {
           const last = hist[hist.length - 1]
           const dt = last.time - first.time
 
-          // 始点→終点のベクトル（投げの方向）
+          // 始点→終点のベクトル（投げの方向）をカメラリグの回転に合わせる
           const displacement = new THREE.Vector3().subVectors(last.pos, first.pos)
+          if (xrCameraRig) {
+            displacement.applyAxisAngle(new THREE.Vector3(0, 1, 0), xrCameraRig.rotation.y)
+          }
           // 実際の経路長（各フレーム間距離の合計）
           let pathLength = 0
           for (let i = 1; i < hist.length; i++) {
