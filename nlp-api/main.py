@@ -2,7 +2,7 @@ import spacy
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from scale_dict import SCALE_DICT, MODIFIER_BONUS, DEFAULT_SCALE
+from scale_dict import SCALE_DICT, MODIFIER_BONUS, DEFAULT_SCALE, lookup_scale_with_hypernyms
 
 app = FastAPI()
 app.add_middleware(
@@ -68,8 +68,10 @@ def subject_scale(req: TextRequest):
             word = token.text
             lemma = token.lemma_
 
-            # 辞書から検索（表層形 → 原形の順）
-            scale = SCALE_DICT.get(word, SCALE_DICT.get(lemma, DEFAULT_SCALE))
+            # 辞書 → 階層探索 → デフォルトの順でスケールを決定
+            scale = lookup_scale_with_hypernyms(word, lemma)
+            if scale is None:
+                scale = DEFAULT_SCALE
 
             # 固有表現ボーナス
             if token.ent_type_ in ("GPE", "LOC", "FAC"):

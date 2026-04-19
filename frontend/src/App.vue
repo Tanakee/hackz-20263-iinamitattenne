@@ -336,6 +336,8 @@ const fishes = []
 let shark = null
 const sharkCutinActive = ref(false)
 let vrCutinSprite = null  // VR用3Dカットイン
+let vrCutinTopBar = null  // 上の黒帯
+let vrCutinBottomBar = null // 下の黒帯
 let vrCutinTimer = 0
 // 水柱データ
 const waterColumns = []
@@ -1180,12 +1182,17 @@ function initThree() {
   bubbleGeo.setAttribute('position', new THREE.BufferAttribute(bubblePositions, 3))
   const bubbleMat = new THREE.PointsMaterial({
     color: 0xffccaa,
-    size: 0.35,
+    size: 3.0,
+    sizeAttenuation: false,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.6,
     depthWrite: false,
+    depthTest: false,
+    fog: false,
   })
   bubbleParticles = new THREE.Points(bubbleGeo, bubbleMat)
+  bubbleParticles.renderOrder = 2
+  bubbleParticles.frustumCulled = false
   scene.add(bubbleParticles)
 
   // 蒸気用パーティクルシステム
@@ -1195,12 +1202,17 @@ function initThree() {
   steamGeo.setAttribute('position', new THREE.BufferAttribute(steamPositions, 3))
   const steamMat = new THREE.PointsMaterial({
     color: 0xffffff,
-    size: 0.5,
+    size: 4.0,
+    sizeAttenuation: false,
     transparent: true,
-    opacity: 0.4,
+    opacity: 0.5,
     depthWrite: false,
+    depthTest: false,
+    fog: false,
   })
   steamParticles = new THREE.Points(steamGeo, steamMat)
+  steamParticles.renderOrder = 2
+  steamParticles.frustumCulled = false
   scene.add(steamParticles)
 
   // 魚を配置
@@ -1553,15 +1565,19 @@ function createSharkMesh() {
 
 // VR用3Dカットイン演出
 function showVRCutin() {
+  // 既存のカットインをクリーンアップ
   if (vrCutinSprite) { scene.remove(vrCutinSprite); vrCutinSprite = null }
+  if (vrCutinTopBar) { scene.remove(vrCutinTopBar); vrCutinTopBar = null }
+  if (vrCutinBottomBar) { scene.remove(vrCutinBottomBar); vrCutinBottomBar = null }
 
+  // --- メインテキストスプライト ---
   const canvas = document.createElement('canvas')
   canvas.width = 1024
   canvas.height = 256
   const ctx = canvas.getContext('2d')
 
-  // 黒帯背景
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'
+  // 背景（半透明）
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
   ctx.fillRect(0, 0, 1024, 256)
 
   // 青い横線
@@ -1609,37 +1625,122 @@ function showVRCutin() {
     depthWrite: false,
   })
   vrCutinSprite = new THREE.Sprite(mat)
+  vrCutinSprite.renderOrder = 999
+  vrCutinSprite.scale.set(3, 0.75, 1)
+
+  // --- 上下の黒帯 ---
+  const barCanvas = document.createElement('canvas')
+  barCanvas.width = 4
+  barCanvas.height = 4
+  const barCtx = barCanvas.getContext('2d')
+  barCtx.fillStyle = 'rgba(0, 0, 0, 0.95)'
+  barCtx.fillRect(0, 0, 4, 4)
+  const barTexture = new THREE.CanvasTexture(barCanvas)
+
+  const topMat = new THREE.SpriteMaterial({
+    map: barTexture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  })
+  vrCutinTopBar = new THREE.Sprite(topMat)
+  vrCutinTopBar.renderOrder = 998
+  vrCutinTopBar.scale.set(8, 3, 1)
+
+  const bottomMat = new THREE.SpriteMaterial({
+    map: barTexture.clone(),
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  })
+  vrCutinBottomBar = new THREE.Sprite(bottomMat)
+  vrCutinBottomBar.renderOrder = 998
+  vrCutinBottomBar.scale.set(8, 3, 1)
 
   // カメラの前に配置
   const camWorldPos = new THREE.Vector3()
   const camWorldDir = new THREE.Vector3()
+  const camUp = new THREE.Vector3()
   camera.getWorldPosition(camWorldPos)
   camera.getWorldDirection(camWorldDir)
-  vrCutinSprite.position.copy(camWorldPos).add(camWorldDir.multiplyScalar(1.5))
-  vrCutinSprite.scale.set(3, 0.75, 1)
+  camera.getWorldDirection(camUp) // 仮
+  camUp.set(0, 1, 0) // ワールドの上方向
 
+  const basePos = camWorldPos.clone().add(camWorldDir.clone().multiplyScalar(1.5))
+  vrCutinSprite.position.copy(basePos)
+  vrCutinTopBar.position.copy(basePos).add(camUp.clone().multiplyScalar(2.0))
+  vrCutinBottomBar.position.copy(basePos).add(camUp.clone().multiplyScalar(-2.0))
+
+  scene.add(vrCutinTopBar)
+  scene.add(vrCutinBottomBar)
   scene.add(vrCutinSprite)
-  vrCutinTimer = 2.2
+  vrCutinTimer = 2.5
 }
 
 function updateVRCutin(dt) {
   if (!vrCutinSprite) return
   vrCutinTimer -= dt
+  const totalDuration = 2.5
+
   // カメラに追従
   const camWorldPos = new THREE.Vector3()
   const camWorldDir = new THREE.Vector3()
   camera.getWorldPosition(camWorldPos)
   camera.getWorldDirection(camWorldDir)
-  vrCutinSprite.position.copy(camWorldPos).add(camWorldDir.multiplyScalar(1.5))
-  // フェードアウト
-  if (vrCutinTimer < 0.5) {
+  const camUp = new THREE.Vector3(0, 1, 0)
+
+  const basePos = camWorldPos.clone().add(camWorldDir.clone().multiplyScalar(1.5))
+  vrCutinSprite.position.copy(basePos)
+
+  // 黒帯のスライドアニメーション
+  const elapsed = totalDuration - vrCutinTimer
+  // 0〜0.3秒: スライドイン、最後0.4秒: スライドアウト
+  let barProgress
+  if (elapsed < 0.3) {
+    barProgress = elapsed / 0.3 // 0→1
+  } else if (vrCutinTimer < 0.4) {
+    barProgress = Math.max(vrCutinTimer / 0.4, 0) // 1→0
+  } else {
+    barProgress = 1
+  }
+  // easeOutQuad
+  const eased = 1 - (1 - barProgress) * (1 - barProgress)
+  const barOffset = 2.0
+  // 帯が画面外（1.8）から所定位置（0.85）にスライド
+  const topY = barOffset + (1.0 - eased) * 1.0
+  const bottomY = -barOffset - (1.0 - eased) * 1.0
+
+  if (vrCutinTopBar) {
+    vrCutinTopBar.position.copy(basePos).add(camUp.clone().multiplyScalar(topY))
+    vrCutinTopBar.material.opacity = eased
+  }
+  if (vrCutinBottomBar) {
+    vrCutinBottomBar.position.copy(basePos).add(camUp.clone().multiplyScalar(bottomY))
+    vrCutinBottomBar.material.opacity = eased
+  }
+
+  // テキストのフェードイン/アウト
+  if (elapsed < 0.2) {
+    vrCutinSprite.material.opacity = elapsed / 0.2
+  } else if (vrCutinTimer < 0.5) {
     vrCutinSprite.material.opacity = Math.max(vrCutinTimer / 0.5, 0)
   }
+
   if (vrCutinTimer <= 0) {
     scene.remove(vrCutinSprite)
     vrCutinSprite.material.dispose()
     vrCutinSprite.material.map.dispose()
     vrCutinSprite = null
+    if (vrCutinTopBar) {
+      scene.remove(vrCutinTopBar)
+      vrCutinTopBar.material.dispose()
+      vrCutinTopBar = null
+    }
+    if (vrCutinBottomBar) {
+      scene.remove(vrCutinBottomBar)
+      vrCutinBottomBar.material.dispose()
+      vrCutinBottomBar = null
+    }
   }
 }
 
@@ -2248,6 +2349,9 @@ function updateBubbles(dt) {
     }
   }
   positions.needsUpdate = true
+  if (bubbleData.length > 0 && Math.random() < 0.02) {
+    console.log('🫧 bubble:', bubbleData.length, 'first=', bubbleData[0].x.toFixed(2), bubbleData[0].y.toFixed(2), bubbleData[0].z.toFixed(2), 'visible=', bubbleParticles.visible, 'parent=', !!bubbleParticles.parent)
+  }
 }
 
 // --- 蒸気（熱い石の着水時） ---
@@ -2293,7 +2397,10 @@ function updateSteam(dt) {
   }
   positions.needsUpdate = true
   // 残りパーティクルに応じて透明度を調整
-  steamParticles.material.opacity = steamData.length > 0 ? 0.4 : 0
+  steamParticles.material.opacity = steamData.length > 0 ? 0.5 : 0
+  if (steamData.length > 0 && Math.random() < 0.02) {
+    console.log('🌫️ steam:', steamData.length, 'first=', steamData[0].x.toFixed(2), steamData[0].y.toFixed(2), steamData[0].z.toFixed(2), 'visible=', steamParticles.visible, 'parent=', !!steamParticles.parent)
+  }
 }
 
 // --- 水柱 ---
@@ -2369,7 +2476,7 @@ function updateWaterColumns(dt) {
 }
 
 // --- 石の投げアニメーション ---
-function throwStone(targetX, targetZ, mass, text, scale = 30, fromPos = null) {
+function throwStone(targetX, targetZ, mass, text, scale = 30, fromPos = null, heat = 50) {
   const startX = fromPos ? fromPos.x : -WATER_SIZE / 2 + 2
   const startY = fromPos ? fromPos.y : 8
   const startZ = fromPos ? fromPos.z : WATER_SIZE / 2 - 2
@@ -2385,9 +2492,10 @@ function throwStone(targetX, targetZ, mass, text, scale = 30, fromPos = null) {
     pos.setZ(i, pos.getZ(i) * n)
   }
   geo.computeVertexNormals()
+  const heatRatio = Math.min((parseFloat(heat) || 0) / 100, 1)
   const mat = new THREE.MeshPhongMaterial({
-    color: 0x888888,
-    emissive: color.clone().multiplyScalar(0.15),
+    color: new THREE.Color(0.45 + heatRatio * 0.55, 0.45 * (1 - heatRatio * 0.6), 0.45 * (1 - heatRatio * 0.7)),
+    emissive: new THREE.Color(heatRatio * 0.4, heatRatio * 0.05, 0),
     specular: 0x333333,
     shininess: 15,
     flatShading: true,
@@ -2415,7 +2523,7 @@ function throwStone(targetX, targetZ, mass, text, scale = 30, fromPos = null) {
     trailPositions: [],
     startX, startY, startZ,
     targetX, targetZ,
-    mass, text, scale,
+    mass, text, scale, heat,
     progress: 0,
     peakY: startY + 3,
   }
@@ -2444,12 +2552,21 @@ function updateFlyingStone(dt) {
       z: f.targetZ / (WATER_SIZE / 2) / 0.8,
       mass: f.mass,
       scale: f.scale,
-      heat: 50,
+      heat: f.heat,
       likes: 0,
       weathered: 0,
     }
     posts.value.push(newPost)
     addStoneMesh(newPost, 0)  // 水面から沈み始める
+
+    // 熱い石なら着水時に蒸気＋ジュー音
+    console.log('🪨 着水! heat=', newPost.heat, 'pos=', f.targetX, f.targetZ)
+    if (newPost.heat >= 30) {
+      console.log('💨 蒸気発生! steamData before:', steamData.length)
+      addSteam(f.targetX, f.targetZ, newPost.heat)
+      console.log('💨 蒸気発生! steamData after:', steamData.length)
+      playSizzleSound(newPost.heat)
+    }
 
     flyingStone = null
     isFlying.value = false
@@ -2761,6 +2878,7 @@ const submitPost = async () => {
     // ランダムな着水位置（水面中央付近）
     const targetX = (Math.random() - 0.5) * WATER_SIZE * 0.6
     const targetZ = (Math.random() - 0.5) * WATER_SIZE * 0.6
+    let postHeat = 0
 
     // Logic APIで投稿作成
     try {
@@ -2778,6 +2896,7 @@ const submitPost = async () => {
       if (createRes.ok) {
         const createData = await createRes.json()
         posts.value.push(createData.post)
+        postHeat = parseFloat(createData.post.heat) || 0
       } else {
         const errorData = await createRes.json().catch(() => ({}))
         throw new Error(errorData.error || '投稿作成に失敗しました')
@@ -2788,7 +2907,7 @@ const submitPost = async () => {
     }
 
     // 3D表示は常に行う
-    throwStone(targetX, targetZ, mass, postText.value, subjectScale)
+    throwStone(targetX, targetZ, mass, postText.value, subjectScale, null, postHeat)
     wsSend({ type: 'post-submitted' })
     postText.value = ''
   } catch (error) {
@@ -3289,7 +3408,9 @@ function xrSubmitPost(targetX, targetZ, fromPos = null) {
   // 即座にフォールバック値で投げる（API待ちなし）
   const fallbackMass = text.length * 0.1 + (text.match(/[！!？?]/g) || []).length * 20
   const fallbackScale = 30
-  throwStone(targetX, targetZ, fallbackMass, text, fallbackScale, fromPos)
+  // 熱量は質量から推定（質量が大きいほど熱い）
+  const fallbackHeat = Math.min(100, fallbackMass * 1.5)
+  throwStone(targetX, targetZ, fallbackMass, text, fallbackScale, fromPos, fallbackHeat)
   postText.value = ''
 }
 
